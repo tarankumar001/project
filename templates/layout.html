@@ -74,6 +74,12 @@
                 <i class="bi bi-braces"></i> ML Implementation
             </a>
 
+            <div class="nav-section-label" style="margin-top:0.75rem;">Predict</div>
+            <a href="{{ url_for('predict_unlabeled') }}"
+                class="nav-link {% if request.endpoint == 'predict_unlabeled' %}active{% endif %}">
+                <i class="bi bi-magic"></i> Unlabeled Prediction
+            </a>
+
             <div class="nav-section-label" style="margin-top:0.75rem;">System</div>
             <a href="{{ url_for('index') }}" class="nav-link {% if request.endpoint == 'index' %}active{% endif %}">
                 <i class="bi bi-activity"></i> Live Monitor

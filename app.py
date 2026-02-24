@@ -17,6 +17,7 @@ Run with:
 # Standard library
 # ──────────────────────────────────────────────
 import datetime
+import io
 import os
 import sqlite3
 import time
@@ -34,6 +35,7 @@ import pandas as pd
 import serial
 from flask import (
     Flask,
+    Response,
     redirect,
     render_template,
     request,
@@ -633,6 +635,128 @@ def logs():
 def ml_info():
     """Static page explaining the ML pipeline with code snippets."""
     return render_template("ml_info.html")
+
+
+# ── Unlabeled Prediction ─────────────────────
+
+# In-memory store for the last unlabeled prediction result (DataFrame + stats)
+last_unlabeled_result = None   # dict: { df, total, normal, fault, fault_pct }
+
+
+@app.route("/predict-unlabeled", methods=["GET", "POST"])
+@login_required
+def predict_unlabeled():
+    """
+    Unlabeled Prediction Mode.
+
+    GET  → render the upload form.
+    POST → accept a CSV with columns [temperature, vibration],
+           run model.predict(), return summary stats + first 10 rows.
+    """
+    global last_unlabeled_result, model
+
+    error   = None
+    result  = None
+
+    if request.method == "POST":
+        uploaded_file = request.files.get("csv_file")
+
+        if not uploaded_file or uploaded_file.filename == "":
+            error = "Please select a CSV file."
+        elif not uploaded_file.filename.lower().endswith(".csv"):
+            error = "Only .csv files are accepted."
+        else:
+            try:
+                df = pd.read_csv(uploaded_file)
+
+                # ── Column validation ───────────────────────────
+                required_cols = {"temperature", "vibration"}
+                missing = required_cols - set(df.columns)
+                if missing:
+                    raise ValueError(
+                        f"CSV is missing required column(s): {', '.join(sorted(missing))}. "
+                        "Please include 'temperature' and 'vibration' columns."
+                    )
+
+                if len(df) == 0:
+                    raise ValueError("The uploaded file contains no data rows.")
+
+                # ── Load model if not in memory ─────────────────
+                if model is None:
+                    model = load_model()
+                if model is None:
+                    raise ValueError(
+                        "No trained model found. Please upload a labelled CSV "
+                        "and train the model first."
+                    )
+
+                # ── Prediction ──────────────────────────────────
+                # The model was trained on ["temperature", "vib_rms"],
+                # so we rename "vibration" → "vib_rms" to match.
+                X = df[["temperature", "vibration"]].astype(float)
+                X = X.rename(columns={"vibration": "vib_rms"})
+                predictions = model.predict(X)
+                df["prediction"] = predictions.astype(int)
+
+                # ── Statistics ─────────────────────────────────
+                total      = len(df)
+                normal_cnt = int((df["prediction"] == 0).sum())
+                fault_cnt  = int((df["prediction"] == 1).sum())
+                fault_pct  = round(fault_cnt / total * 100, 2) if total > 0 else 0.0
+
+                # Store globally for CSV download
+                last_unlabeled_result = {
+                    "df":        df,
+                    "total":     total,
+                    "normal":    normal_cnt,
+                    "fault":     fault_cnt,
+                    "fault_pct": fault_pct,
+                }
+
+                # Preview: first 10 FAULT rows (prediction == 1)
+                fault_df = df[df["prediction"] == 1]
+                preview_rows = fault_df.head(10).to_dict(orient="records")
+
+                result = {
+                    "total":       total,
+                    "normal":      normal_cnt,
+                    "fault":       fault_cnt,
+                    "fault_pct":   fault_pct,
+                    "preview":     preview_rows,
+                    "is_critical": fault_pct >= 20,
+                }
+
+            except Exception as exc:
+                error = str(exc)
+
+    return render_template(
+        "predict_unlabeled.html",
+        result=result,
+        error=error,
+        has_download=(last_unlabeled_result is not None),
+    )
+
+
+@app.route("/predict-unlabeled/download")
+@login_required
+def predict_unlabeled_download():
+    """Return the last unlabeled prediction result as a downloadable CSV."""
+    global last_unlabeled_result
+
+    if last_unlabeled_result is None:
+        return redirect(url_for("predict_unlabeled"))
+
+    df = last_unlabeled_result["df"]
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+
+    return Response(
+        io.BytesIO(csv_bytes),
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=predictions.csv",
+            "Content-Length": str(len(csv_bytes)),
+        },
+    )
 
 
 # ── Live Monitor ─────────────────────────────

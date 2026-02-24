@@ -1447,3 +1447,62 @@ a:hover {
   margin-right: 0.35rem;
   margin-bottom: 0.35rem;
 }
+
+/* ================================================================
+   UNLABELED PREDICTION PAGE
+   ================================================================ */
+
+/* Predict overlay — reuses spinner / title / sub from training styles */
+#predict-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(10, 14, 26, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+}
+
+#predict-overlay.visible {
+  display: flex;
+}
+
+/* Fault-rate card: coloured top-edge glow strip */
+.metric-card {
+  /* ensure relative positioning is present for the strip */
+  position: relative;
+  overflow: hidden;
+}
+
+.unlabeled-fault-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+}
+
+.unlabeled-fault-bar-red {
+  background: linear-gradient(90deg, var(--accent-red), #c0392b);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.5);
+}
+
+.unlabeled-fault-bar-green {
+  background: linear-gradient(90deg, var(--accent-green), #27ae60);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.5);
+}
+
+/* Subtle border tint for the fault-rate card itself */
+.unlabeled-card-critical {
+  border-color: rgba(248, 113, 113, 0.35) !important;
+}
+
+.unlabeled-card-safe {
+  border-color: rgba(52, 211, 153, 0.35) !important;
+}

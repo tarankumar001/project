@@ -1,0 +1,330 @@
+{% extends "layout.html" %}
+
+{% block title %}Unlabeled Prediction – MotorAI{% endblock %}
+
+{% block content %}
+
+<!-- Processing overlay (shown while form submits) -->
+<div id="predict-overlay">
+    <div class="training-spinner"></div>
+    <div class="training-title">Analyzing Data…</div>
+    <p class="training-sub">Running predictions on your dataset</p>
+    <div class="training-progress-wrap">
+        <div class="training-progress-label">
+            <span>Progress</span>
+            <span id="predictPct">0%</span>
+        </div>
+        <div class="progress-bar-outer">
+            <div class="progress-bar-inner" id="predictBar" style="width:0%;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Page Header ──────────────────────────────────────── -->
+<div class="page-header anim-slide-up delay-1">
+    <h1 class="page-title">
+        <i class="bi bi-magic me-2 text-accent"></i>Unlabeled Prediction
+    </h1>
+    <p class="page-subtitle">
+        Upload a CSV with <code style="color:var(--accent-cyan);">temperature</code> &amp;
+        <code style="color:var(--accent-cyan);">vibration</code> columns — no label required.
+        The model will predict each row automatically.
+    </p>
+</div>
+
+<!-- ── Error Alert ──────────────────────────────────────── -->
+{% if error %}
+<div class="alert alert-danger anim-slide-up delay-2">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+<!-- ── Upload Card ──────────────────────────────────────── -->
+<div class="glass-card anim-slide-up delay-3" style="max-width:640px; margin-bottom:2rem;">
+    <div class="glass-card-header">
+        <i class="bi bi-file-earmark-spreadsheet" style="color:var(--accent-cyan);"></i>
+        <h3>Upload CSV Dataset</h3>
+    </div>
+    <div class="glass-card-body">
+
+        <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1.25rem;">
+            Your CSV must contain:
+            <code style="color:var(--accent-cyan);">temperature</code>,
+            <code style="color:var(--accent-cyan);">vibration</code>.
+            A <code style="color:var(--accent-purple);">prediction</code> column will be
+            added automatically (0&nbsp;=&nbsp;Normal, 1&nbsp;=&nbsp;Fault).
+        </p>
+
+        <form method="post" enctype="multipart/form-data" id="predictForm" novalidate>
+
+            <!-- Drag-and-drop zone -->
+            <div class="upload-zone" id="predictDropZone">
+                <div class="upload-icon">🔍</div>
+                <div class="upload-title">Drag &amp; drop your CSV here</div>
+                <div class="upload-sub" id="predictFileLabel">or click to browse files</div>
+            </div>
+
+            <!-- Hidden file input -->
+            <input type="file" id="predictCsvFile" name="csv_file" accept=".csv" required style="display:none;">
+
+            <ol style="font-size:0.8rem; color:var(--text-muted); margin:1rem 0 1.35rem; padding-left:1.25rem;">
+                <li>Select or drop your unlabeled CSV dataset.</li>
+                <li>Click <strong style="color:var(--text-primary);">Run Prediction</strong> to process.</li>
+                <li>View results and optionally download the annotated CSV.</li>
+            </ol>
+
+            <button type="submit" class="btn btn-primary btn-block" id="predictBtn">
+                <i class="bi bi-lightning-charge"></i> Run Prediction
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- ── Results Section ──────────────────────────────────── -->
+{% if result %}
+<div id="predict-results">
+
+    <!-- Health Indicator Banner -->
+    <div class="conclusion-block {% if result.is_critical %}fault{% else %}normal{% endif %} anim-slide-up delay-2"
+        style="margin-bottom:1.5rem;">
+        <div class="conclusion-status">
+            <span class="conclusion-icon">{% if result.is_critical %}🚨{% else %}✅{% endif %}</span>
+            {% if result.is_critical %}
+            <span style="color:var(--accent-red);">High Fault Rate Detected — Immediate Inspection Recommended</span>
+            {% else %}
+            <span style="color:var(--accent-green);">Motor Fleet Looks Healthy — Fault Rate Within Safe Threshold</span>
+            {% endif %}
+        </div>
+        <div class="conclusion-detail">
+            Fault percentage is <strong>{{ result.fault_pct }}%</strong>
+            (threshold: &lt;20% = normal, ≥20% = critical).
+            Out of <strong>{{ result.total }}</strong> samples analysed,
+            <strong>{{ result.normal }}</strong> are predicted normal and
+            <strong>{{ result.fault }}</strong> are predicted faulty.
+        </div>
+    </div>
+
+    <!-- Metric Cards -->
+    <div class="metric-grid anim-slide-up delay-3" style="margin-bottom:1.75rem;">
+
+        <!-- Total Samples -->
+        <div class="metric-card">
+            <div class="metric-icon metric-icon-blue">
+                <i class="bi bi-database-fill" style="font-size:1.25rem;"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-label">Total Samples</div>
+                <div class="metric-value" data-counter="{{ result.total }}" data-decimals="0" data-duration="900">{{
+                    result.total }}</div>
+                <div class="metric-sub">rows processed</div>
+            </div>
+        </div>
+
+        <!-- Normal Count -->
+        <div class="metric-card">
+            <div class="metric-icon metric-icon-green">
+                <i class="bi bi-check-circle-fill" style="font-size:1.25rem;"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-label">Normal</div>
+                <div class="metric-value" data-counter="{{ result.normal }}" data-decimals="0" data-duration="900">{{
+                    result.normal }}</div>
+                <div class="metric-sub">predicted label 0</div>
+            </div>
+        </div>
+
+        <!-- Fault Count -->
+        <div class="metric-card">
+            <div class="metric-icon metric-icon-red">
+                <i class="bi bi-exclamation-triangle-fill" style="font-size:1.25rem;"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-label">Faults</div>
+                <div class="metric-value" data-counter="{{ result.fault }}" data-decimals="0" data-duration="900">{{
+                    result.fault }}</div>
+                <div class="metric-sub">predicted label 1</div>
+            </div>
+        </div>
+
+        <!-- Fault Percentage with visual indicator -->
+        <div class="metric-card
+            {% if result.is_critical %}unlabeled-card-critical{% else %}unlabeled-card-safe{% endif %}">
+            <div class="metric-icon
+                {% if result.is_critical %}metric-icon-red{% else %}metric-icon-green{% endif %}">
+                <i class="bi bi-pie-chart-fill" style="font-size:1.25rem;"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-label">Fault Rate</div>
+                <div class="metric-value {% if result.is_critical %}text-red{% else %}text-green{% endif %}"
+                    data-counter="{{ result.fault_pct }}" data-decimals="1" data-suffix="%" data-duration="1100">{{
+                    result.fault_pct }}%</div>
+                <div class="metric-sub">
+                    {% if result.is_critical %}
+                    <span style="color:var(--accent-red);">⚠ Above 20% threshold</span>
+                    {% else %}
+                    <span style="color:var(--accent-green);">✓ Below 20% threshold</span>
+                    {% endif %}
+                </div>
+            </div>
+            <!-- Coloured glow strip along the top edge -->
+            <div class="unlabeled-fault-bar
+                {% if result.is_critical %}unlabeled-fault-bar-red{% else %}unlabeled-fault-bar-green{% endif %}">
+            </div>
+        </div>
+
+    </div><!-- /.metric-grid -->
+
+    <!-- Download CSV button -->
+    {% if has_download %}
+    <div class="anim-slide-up delay-4"
+        style="margin-bottom:1.75rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+        <a href="{{ url_for('predict_unlabeled_download') }}" class="btn btn-primary" id="downloadBtn">
+            <i class="bi bi-download"></i> Download Predictions as CSV
+        </a>
+        <span style="font-size:0.8rem; color:var(--text-muted);">
+            Includes original columns + <code style="color:var(--accent-purple);">prediction</code> column
+        </span>
+    </div>
+    {% endif %}
+
+    <!-- Preview Table — first 10 rows -->
+    <div class="glass-card anim-slide-up delay-5">
+        <div class="glass-card-header">
+            <i class="bi bi-table" style="color:var(--accent-purple);"></i>
+            <h3>Preview — First 10 Fault Predictions</h3>
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="data-table" id="previewTable">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Temperature</th>
+                        <th>Vibration</th>
+                        <th>Prediction</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if result.preview %}
+                    {% for row in result.preview %}
+                    <tr>
+                        <td style="color:var(--text-muted);">{{ loop.index }}</td>
+                        <td>{{ row.temperature | round(2) }}</td>
+                        <td>{{ row.vibration | round(2) }}</td>
+                        <td>
+                            <span class="acc-badge acc-badge-red">
+                                ✗ Fault
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% else %}
+                    <tr>
+                        <td colspan="4"
+                            style="text-align:center; padding:2rem; color:var(--accent-green); font-weight:600;">
+                            ✅ No faults detected — all samples predicted as Normal
+                        </td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div><!-- /.glass-card -->
+
+</div><!-- /#predict-results -->
+{% endif %}
+
+{% endblock %}
+
+
+{% block extra_scripts %}
+<script>
+    /* ================================================================
+       Unlabeled Prediction Page — interactive JS
+       ================================================================ */
+    (function () {
+
+        /* ── Drag-and-drop upload zone ────────────────────────────── */
+        var dropZone = document.getElementById('predictDropZone');
+        var csvInput = document.getElementById('predictCsvFile');
+        var fileLabel = document.getElementById('predictFileLabel');
+        var predictForm = document.getElementById('predictForm');
+        var overlay = document.getElementById('predict-overlay');
+
+        if (dropZone && csvInput) {
+            dropZone.addEventListener('click', function () { csvInput.click(); });
+
+            dropZone.addEventListener('dragover', function (e) {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+
+            dropZone.addEventListener('dragleave', function () {
+                dropZone.classList.remove('dragover');
+            });
+
+            dropZone.addEventListener('drop', function (e) {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                var files = e.dataTransfer.files;
+                if (files.length) {
+                    csvInput.files = files;
+                    if (fileLabel) fileLabel.textContent = files[0].name;
+                }
+            });
+
+            csvInput.addEventListener('change', function () {
+                if (this.files.length && fileLabel) {
+                    fileLabel.textContent = this.files[0].name;
+                }
+            });
+        }
+
+        /* ── Loading overlay while processing ────────────────────── */
+        if (predictForm && overlay) {
+            predictForm.addEventListener('submit', function () {
+                if (!csvInput || !csvInput.files || csvInput.files.length === 0) return;
+                overlay.classList.add('visible');
+                startPredictProgress();
+            });
+        }
+
+        function startPredictProgress() {
+            var bar = document.getElementById('predictBar');
+            var pct = document.getElementById('predictPct');
+            if (!bar) return;
+
+            var progress = 0;
+            var interval = setInterval(function () {
+                var inc = progress < 60 ? (Math.random() * 14 + 4) :
+                    progress < 85 ? (Math.random() * 6 + 1) :
+                        (Math.random() * 1.2 + 0.3);
+                progress = Math.min(progress + inc, 93);
+                bar.style.width = progress.toFixed(1) + '%';
+                if (pct) pct.textContent = Math.round(progress) + '%';
+                if (progress >= 93) clearInterval(interval);
+            }, 300);
+        }
+
+        /* ── Stagger table row animations ────────────────────────── */
+        document.querySelectorAll('#previewTable tbody tr').forEach(function (row, i) {
+            row.style.animationDelay = (i * 0.055) + 's';
+        });
+
+        /* ── Results section smooth fade-in on page load ─────────── */
+        var resultsEl = document.getElementById('predict-results');
+        if (resultsEl) {
+            resultsEl.style.opacity = '0';
+            resultsEl.style.transform = 'translateY(22px)';
+            resultsEl.style.transition = 'opacity 0.65s cubic-bezier(0.4,0,0.2,1), transform 0.65s cubic-bezier(0.4,0,0.2,1)';
+            /* Double rAF ensures the browser has painted the initial state first */
+            requestAnimationFrame(function () {
+                requestAnimationFrame(function () {
+                    resultsEl.style.opacity = '1';
+                    resultsEl.style.transform = 'translateY(0)';
+                });
+            });
+        }
+
+    }());
+</script>
+{% endblock %}
