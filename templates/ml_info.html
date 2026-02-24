@@ -1,0 +1,264 @@
+{% extends "layout.html" %}
+
+{% block title %}ML Implementation – MotorAI{% endblock %}
+
+{% block content %}
+
+<!-- Page header -->
+<div class="page-header anim-slide-up delay-1">
+    <h1 class="page-title"><i class="bi bi-braces me-2 text-accent"></i>ML Implementation</h1>
+    <p class="page-subtitle">How the RandomForest model is built, trained, and evaluated under the hood.</p>
+</div>
+
+<div class="row" style="gap:0; --bs-gutter-x:1.25rem;">
+
+    <!-- ===== Left column: Code ===== -->
+    <div class="col-lg-7 mb-4 anim-slide-up delay-2">
+        <div class="glass-card">
+            <div class="glass-card-header">
+                <i class="bi bi-code-slash" style="color:var(--accent-cyan);"></i>
+                <h3>Source Code Walkthrough</h3>
+            </div>
+            <div class="glass-card-body">
+
+                <!-- STEP 1: Import -->
+                <div class="info-section">
+                    <h4>① Imports &amp; Setup <span class="badge-tag">scikit-learn</span></h4>
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="code-dots">
+                                <div class="code-dot code-dot-red"></div>
+                                <div class="code-dot code-dot-yellow"></div>
+                                <div class="code-dot code-dot-green"></div>
+                            </div>
+                            <span class="code-lang">Python · app.py</span>
+                            <button class="btn btn-ghost btn-sm copy-btn">Copy</button>
+                        </div>
+                        <div class="code-body">
+                            <pre><span class="tok-kw">import</span> pandas <span class="tok-kw">as</span> pd
+<span class="tok-kw">from</span> sklearn.model_selection <span class="tok-kw">import</span> <span class="tok-fn">train_test_split</span>
+<span class="tok-kw">from</span> sklearn.ensemble <span class="tok-kw">import</span> <span class="tok-cls">RandomForestClassifier</span>
+<span class="tok-kw">from</span> sklearn.metrics <span class="tok-kw">import</span> (
+    <span class="tok-fn">accuracy_score</span>,
+    <span class="tok-fn">confusion_matrix</span>,
+    <span class="tok-fn">roc_curve</span>,
+    <span class="tok-fn">roc_auc_score</span>,
+)
+<span class="tok-kw">import</span> joblib</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: Preprocessing -->
+                <div class="info-section">
+                    <h4>② Loading &amp; Preprocessing <span class="badge-tag">pandas</span></h4>
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="code-dots">
+                                <div class="code-dot code-dot-red"></div>
+                                <div class="code-dot code-dot-yellow"></div>
+                                <div class="code-dot code-dot-green"></div>
+                            </div>
+                            <span class="code-lang">Python · preprocessing</span>
+                            <button class="btn btn-ghost btn-sm copy-btn">Copy</button>
+                        </div>
+                        <div class="code-body">
+                            <pre><span class="tok-cm"># Load CSV uploaded by user</span>
+df = pd.<span class="tok-fn">read_csv</span>(uploaded_file)
+
+<span class="tok-cm"># Derive vibration RMS feature</span>
+df[<span class="tok-str">'vib_rms'</span>] = df[<span class="tok-str">'vibration'</span>].<span class="tok-fn">astype</span>(<span class="tok-fn">float</span>)
+
+<span class="tok-cm"># Select feature matrix X and target y</span>
+X = df[[<span class="tok-str">'temperature'</span>, <span class="tok-str">'vib_rms'</span>]].<span class="tok-fn">astype</span>(<span class="tok-fn">float</span>)
+y = df[<span class="tok-str">'label'</span>]</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 3: Train/Test split -->
+                <div class="info-section">
+                    <h4>③ Train / Test Split <span class="badge-tag">80/20</span></h4>
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="code-dots">
+                                <div class="code-dot code-dot-red"></div>
+                                <div class="code-dot code-dot-yellow"></div>
+                                <div class="code-dot code-dot-green"></div>
+                            </div>
+                            <span class="code-lang">Python · split</span>
+                            <button class="btn btn-ghost btn-sm copy-btn">Copy</button>
+                        </div>
+                        <div class="code-body">
+                            <pre>X_train, X_test, y_train, y_test = <span class="tok-fn">train_test_split</span>(
+    X, y,
+    test_size=<span class="tok-num">0.2</span>,      <span class="tok-cm"># 20% held out for evaluation</span>
+    random_state=<span class="tok-num">42</span>,  <span class="tok-cm"># reproducible results</span>
+    stratify=y,        <span class="tok-cm"># preserve class balance</span>
+)</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 4: Model training -->
+                <div class="info-section">
+                    <h4>④ Model Training <span class="badge-tag">RandomForest</span></h4>
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="code-dots">
+                                <div class="code-dot code-dot-red"></div>
+                                <div class="code-dot code-dot-yellow"></div>
+                                <div class="code-dot code-dot-green"></div>
+                            </div>
+                            <span class="code-lang">Python · training</span>
+                            <button class="btn btn-ghost btn-sm copy-btn">Copy</button>
+                        </div>
+                        <div class="code-body">
+                            <pre>clf = <span class="tok-cls">RandomForestClassifier</span>(
+    n_estimators=<span class="tok-num">100</span>,  <span class="tok-cm"># 100 decision trees</span>
+    random_state=<span class="tok-num">42</span>,
+)
+clf.<span class="tok-fn">fit</span>(X_train, y_train)
+
+<span class="tok-cm"># Predict on held-out test set</span>
+y_pred  = clf.<span class="tok-fn">predict</span>(X_test)
+y_proba = clf.<span class="tok-fn">predict_proba</span>(X_test)</pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 5: Evaluation -->
+                <div class="info-section">
+                    <h4>⑤ Evaluation Metrics <span class="badge-tag">metrics</span></h4>
+                    <div class="code-container">
+                        <div class="code-header">
+                            <div class="code-dots">
+                                <div class="code-dot code-dot-red"></div>
+                                <div class="code-dot code-dot-yellow"></div>
+                                <div class="code-dot code-dot-green"></div>
+                            </div>
+                            <span class="code-lang">Python · evaluation</span>
+                            <button class="btn btn-ghost btn-sm copy-btn">Copy</button>
+                        </div>
+                        <div class="code-body">
+                            <pre><span class="tok-cm"># Accuracy: fraction of correct predictions</span>
+acc = <span class="tok-fn">accuracy_score</span>(y_test, y_pred)
+
+<span class="tok-cm"># Confusion matrix: TP, FP, TN, FN breakdown</span>
+cm = <span class="tok-fn">confusion_matrix</span>(y_test, y_pred)
+
+<span class="tok-cm"># ROC & AUC (binary classification only)</span>
+fpr, tpr, _ = <span class="tok-fn">roc_curve</span>(y_test_binary, y_proba[:, <span class="tok-num">1</span>])
+roc_auc      = <span class="tok-fn">roc_auc_score</span>(y_test_binary, y_proba[:, <span class="tok-num">1</span>])
+
+<span class="tok-cm"># Persist the trained model</span>
+joblib.<span class="tok-fn">dump</span>(clf, <span class="tok-str">'motor_model.pkl'</span>)</pre>
+                        </div>
+                    </div>
+                </div>
+
+            </div><!-- glass-card-body -->
+        </div><!-- glass-card -->
+    </div><!-- col -->
+
+    <!-- ===== Right column: Explanations ===== -->
+    <div class="col-lg-5 mb-4 anim-slide-up delay-3">
+        <div class="glass-card h-100">
+            <div class="glass-card-header">
+                <i class="bi bi-lightbulb" style="color:var(--accent-yellow);"></i>
+                <h3>Technical Explanations</h3>
+            </div>
+            <div class="glass-card-body">
+
+                <div class="info-section">
+                    <h4>Why Random Forest?</h4>
+                    <div class="explanation-grid" style="grid-template-columns:1fr;">
+                        <div class="explanation-card">
+                            <h5>🌳 Ensemble Robustness</h5>
+                            <p>Random Forest builds 100 independent decision trees and votes on the majority prediction.
+                                Ensembles drastically reduce overfitting compared to a single tree.</p>
+                        </div>
+                        <div class="explanation-card">
+                            <h5>📊 No Feature Scaling Needed</h5>
+                            <p>Tree-based models are invariant to the scale of features, so temperature (0–120 °C) and
+                                vibration RMS don't need standardisation.</p>
+                        </div>
+                        <div class="explanation-card">
+                            <h5>⚡ Built-in Feature Importance</h5>
+                            <p>RandomForestClassifier exposes <code>feature_importances_</code>, giving engineers
+                                insight into which sensor matters most for fault detection.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="divider">
+
+                <div class="info-section">
+                    <h4>Train/Test Split Logic</h4>
+                    <p>We reserve <strong>20%</strong> of rows as a hold-out test set (stratified to maintain class
+                        proportions). The model never sees this data during training, ensuring an unbiased accuracy
+                        estimate.</p>
+                </div>
+
+                <hr class="divider">
+
+                <div class="info-section">
+                    <h4>ROC Curve &amp; AUC</h4>
+                    <p>
+                        The Receiver Operating Characteristic (ROC) curve plots the
+                        <strong>True Positive Rate</strong> vs. <strong>False Positive Rate</strong>
+                        at varying classification thresholds.
+                    </p>
+                    <p>
+                        <strong>AUC = 1.0</strong> → perfect classifier.<br>
+                        <strong>AUC = 0.5</strong> → random guessing.<br>
+                        <strong>AUC &gt; 0.85</strong> → production-ready for fault detection.
+                    </p>
+                </div>
+
+                <hr class="divider">
+
+                <div class="info-section">
+                    <h4>Confusion Matrix</h4>
+                    <div class="explanation-grid">
+                        <div class="explanation-card">
+                            <h5>✅ True Positive</h5>
+                            <p>Correctly predicted FAULT when motor was faulty.</p>
+                        </div>
+                        <div class="explanation-card">
+                            <h5>✅ True Negative</h5>
+                            <p>Correctly predicted NORMAL when motor was normal.</p>
+                        </div>
+                        <div class="explanation-card">
+                            <h5>❌ False Positive</h5>
+                            <p>Predicted FAULT but motor was actually normal. (False alarm)</p>
+                        </div>
+                        <div class="explanation-card">
+                            <h5>❌ False Negative</h5>
+                            <p>Predicted NORMAL but motor was actually faulty. (Miss — most dangerous!)</p>
+                        </div>
+                    </div>
+                </div>
+
+                <hr class="divider">
+
+                <div class="info-section">
+                    <h4>Feature Selection</h4>
+                    <p>
+                        Two sensor readings are used as model inputs:
+                    </p>
+                    <ul style="font-size:0.875rem; color:var(--text-secondary); padding-left:1.1rem; line-height:1.8;">
+                        <li><strong style="color:var(--text-primary);">temperature</strong> — bearing overheating is an
+                            early fault indicator.</li>
+                        <li><strong style="color:var(--text-primary);">vib_rms</strong> — vibration Root Mean Square
+                            captures mechanical imbalance or bearing wear.</li>
+                    </ul>
+                </div>
+
+            </div><!-- glass-card-body -->
+        </div><!-- glass-card -->
+    </div><!-- col -->
+
+</div><!-- row -->
+
+{% endblock %}

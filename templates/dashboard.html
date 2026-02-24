@@ -1,139 +1,212 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 
-{% block title %}Dashboard - Motor ML{% endblock %}
+{% block title %}Training Results – MotorAI{% endblock %}
 
 {% block content %}
-  <div class="row justify-content-center">
-    <div class="col-lg-10">
-      <div class="card shadow-sm mb-4 border-0 fade-in-up fade-delay-1">
-        <div class="card-header bg-secondary text-white d-flex justify-content-between align-items-center">
-          <strong>Training Results</strong>
-          <span class="small">
-            <a href="{{ url_for('dashboard_upload') }}" class="link-light text-decoration-underline">
-              Upload new data
-            </a>
-          </span>
-        </div>
-        <div class="card-body">
-          {% if results %}
-            <div class="row text-center mb-3">
-              <div class="col-md-4 mb-2">
-                <div class="p-3 bg-light rounded-3 fade-in-up fade-delay-1">
-                  <div class="small text-muted">Accuracy</div>
-                  <div class="fs-5 fw-semibold">
-                    {{ (results.accuracy * 100) | round(2) }}%
-                  </div>
-                </div>
-              </div>
-              <div class="col-md-4 mb-2">
-                <div class="p-3 bg-light rounded-3 fade-in-up fade-delay-2">
-                  <div class="small text-muted">Samples</div>
-                  <div class="fs-5 fw-semibold">
-                    {{ results.n_samples }}
-                    <span class="text-muted small d-block">
-                      Train {{ results.n_train }}, Test {{ results.n_test }}
-                    </span>
-                  </div>
-                </div>
-              </div>
-              <div class="col-md-4 mb-2">
-                <div class="p-3 bg-light rounded-3 fade-in-up fade-delay-3">
-                  <div class="small text-muted">ROC AUC</div>
-                  <div class="fs-5 fw-semibold">
-                    {% if results.roc_auc is not none %}
-                      {{ results.roc_auc | round(4) }}
-                    {% else %}
-                      <span class="text-muted">N/A (multi-class)</span>
-                    {% endif %}
-                  </div>
-                </div>
-              </div>
-            </div>
 
-            {% if results.class_counts %}
-            <div class="mb-3 fade-in-up fade-delay-2">
-              <span class="small text-muted">Class distribution:</span>
-              {% for label, count in results.class_counts.items() %}
-                <span class="badge bg-secondary me-1">
-                  {{ label }}: {{ count }}
-                </span>
-              {% endfor %}
-            </div>
-            {% endif %}
+<!-- Page header -->
+<div class="page-header anim-slide-up delay-1">
+  <h1 class="page-title"><i class="bi bi-bar-chart-line me-2 text-accent"></i>Training Results</h1>
+  <p class="page-subtitle">Last model training run metrics, plots, and analysis.</p>
+</div>
 
-            <hr class="my-4">
+{% if results %}
 
-            <div class="row fade-in-up fade-delay-3">
-              {% if 'confusion_matrix' in results.plots %}
-              <div class="col-md-6 mb-3">
-                <h6>Confusion Matrix</h6>
-                <img
-                  src="{{ url_for('static', filename=results.plots.confusion_matrix) }}?v={{ cache_buster }}"
-                  class="img-fluid img-thumbnail graph-animate graph-delay-1"
-                  alt="Confusion Matrix"
-                >
-              </div>
-              {% endif %}
+<!-- ====== Metric Cards ====== -->
+<div class="metric-grid">
 
-              {% if 'roc_curve' in results.plots %}
-              <div class="col-md-6 mb-3">
-                <h6>ROC Curve</h6>
-                <img
-                  src="{{ url_for('static', filename=results.plots.roc_curve) }}?v={{ cache_buster }}"
-                  class="img-fluid img-thumbnail graph-animate graph-delay-2"
-                  alt="ROC Curve"
-                >
-              </div>
-              {% endif %}
-
-              {% if 'feature_importance' in results.plots %}
-              <div class="col-md-6 mb-3">
-                <h6>Feature Importance</h6>
-                <img
-                  src="{{ url_for('static', filename=results.plots.feature_importance) }}?v={{ cache_buster }}"
-                  class="img-fluid img-thumbnail graph-animate graph-delay-3"
-                  alt="Feature Importance"
-                >
-              </div>
-              {% endif %}
-            </div>
-
-            <hr class="my-4">
-
-            <div class="mt-3 fade-in-up fade-delay-3">
-              <h5>Conclusion</h5>
-              {% set anomaly_rate = results.anomaly_rate %}
-              {% if anomaly_rate is not none and anomaly_rate > 0.2 and results.accuracy >= 0.8 %}
-                <p class="mb-1">
-                  <strong class="text-danger">⚠ Motor shows abnormal vibration patterns indicating potential fault.</strong>
-                </p>
-                <p class="small text-muted mb-0">
-                  The model detects a relatively high proportion of anomaly/fault class samples
-                  (around {{ (anomaly_rate * 100) | round(1) }}% of the data), and the classification
-                  accuracy is strong. This suggests the model is reliably distinguishing between
-                  normal and faulty conditions, and the current dataset indicates frequent faults.
-                </p>
-              {% else %}
-                <p class="mb-1">
-                  <strong class="text-success">✓ Motor operating within normal conditions.</strong>
-                </p>
-                <p class="small text-muted mb-0">
-                  The anomaly/fault class appears relatively rare in the dataset and the model
-                  achieves good accuracy. This suggests the motor behavior captured in the data
-                  is mostly normal, and the model can be used as an early warning system for
-                  unusual vibration or temperature patterns.
-                </p>
-              {% endif %}
-            </div>
-          {% else %}
-            <p class="text-muted mb-0">
-              No results yet.
-              Go to the <strong>Upload</strong> tab and train a model to see metrics here.
-            </p>
-          {% endif %}
-        </div>
+  <!-- Accuracy -->
+  <div class="metric-card anim-slide-up delay-1">
+    <div class="metric-icon metric-icon-blue">
+      <i class="bi bi-bullseye" style="font-size:1.2rem;"></i>
+    </div>
+    <div class="metric-content">
+      <div class="metric-label">Accuracy</div>
+      <div class="metric-value" data-counter="{{ (results.accuracy * 100) | round(2) }}" data-suffix="%"
+        data-decimals="1" data-duration="1400">
+        {{ (results.accuracy * 100) | round(2) }}%
       </div>
     </div>
   </div>
-{% endblock %}
 
+  <!-- ROC AUC -->
+  <div class="metric-card anim-slide-up delay-2">
+    <div class="metric-icon metric-icon-purple">
+      <i class="bi bi-graph-up-arrow" style="font-size:1.2rem;"></i>
+    </div>
+    <div class="metric-content">
+      <div class="metric-label">ROC AUC</div>
+      {% if results.roc_auc is not none %}
+      <div class="metric-value" data-counter="{{ results.roc_auc | round(4) }}" data-suffix="" data-decimals="4"
+        data-duration="1400">
+        {{ results.roc_auc | round(4) }}
+      </div>
+      {% else %}
+      <div class="metric-value" style="font-size:1rem; color:var(--text-muted);">N/A</div>
+      <div class="metric-sub">Multi-class</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Total Samples -->
+  <div class="metric-card anim-slide-up delay-3">
+    <div class="metric-icon metric-icon-cyan">
+      <i class="bi bi-database" style="font-size:1.2rem;"></i>
+    </div>
+    <div class="metric-content">
+      <div class="metric-label">Total Samples</div>
+      <div class="metric-value" data-counter="{{ results.n_samples }}" data-suffix="" data-decimals="0"
+        data-duration="1000">
+        {{ results.n_samples }}
+      </div>
+      <div class="metric-sub">Train {{ results.n_train }} / Test {{ results.n_test }}</div>
+    </div>
+  </div>
+
+  <!-- Anomaly Rate -->
+  {% if results.anomaly_rate is not none %}
+  <div class="metric-card anim-slide-up delay-4">
+    <div class="metric-icon metric-icon-red">
+      <i class="bi bi-exclamation-triangle" style="font-size:1.2rem;"></i>
+    </div>
+    <div class="metric-content">
+      <div class="metric-label">Anomaly Rate</div>
+      <div class="metric-value" data-counter="{{ (results.anomaly_rate * 100) | round(1) }}" data-suffix="%"
+        data-decimals="1" data-duration="1200">
+        {{ (results.anomaly_rate * 100) | round(1) }}%
+      </div>
+      <div class="metric-sub">In full dataset</div>
+    </div>
+  </div>
+  {% endif %}
+
+</div>
+
+<!-- Class Distribution -->
+{% if results.class_counts %}
+<div class="anim-slide-up delay-3" style="margin-bottom:1.25rem;">
+  <span style="font-size:0.78rem; color:var(--text-muted); margin-right:0.5rem;">Class distribution:</span>
+  {% for label, count in results.class_counts.items() %}
+  <span class="class-chip">{{ label }}: {{ count }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+<hr class="divider">
+
+<!-- ====== Plots Grid ====== -->
+<div class="plots-grid">
+
+  {% if 'confusion_matrix' in results.plots %}
+  <div class="plot-card anim-slide-up delay-2">
+    <div class="plot-card-title">🔲 Confusion Matrix</div>
+    <img src="{{ url_for('static', filename=results.plots.confusion_matrix) }}?v={{ cache_buster }}"
+      alt="Confusion Matrix" loading="lazy">
+  </div>
+  {% endif %}
+
+  {% if 'roc_curve' in results.plots %}
+  <div class="plot-card anim-slide-up delay-3">
+    <div class="plot-card-title">📈 ROC Curve</div>
+    <img src="{{ url_for('static', filename=results.plots.roc_curve) }}?v={{ cache_buster }}" alt="ROC Curve"
+      loading="lazy">
+  </div>
+  {% endif %}
+
+  {% if 'feature_importance' in results.plots %}
+  <div class="plot-card anim-slide-up delay-4">
+    <div class="plot-card-title">⚖️ Feature Importance</div>
+    <img src="{{ url_for('static', filename=results.plots.feature_importance) }}?v={{ cache_buster }}"
+      alt="Feature Importance" loading="lazy">
+  </div>
+  {% endif %}
+
+</div>
+
+<hr class="divider">
+
+<!-- ====== Conclusion Block ====== -->
+{% set acc = results.accuracy %}
+{% set auc = results.roc_auc %}
+{% set anomaly_rate = results.anomaly_rate %}
+
+{% if acc >= 0.9 and (auc is none or auc >= 0.9) %}
+{% set conclusion_class = 'normal' %}
+{% set conclusion_icon = '✅' %}
+{% set conclusion_title = 'Excellent Model Performance – Motor Operating Normally' %}
+{% set conclusion_color = 'var(--accent-green)' %}
+{% elif acc >= 0.75 and anomaly_rate is not none and anomaly_rate > 0.25 %}
+{% set conclusion_class = 'fault' %}
+{% set conclusion_icon = '⚠️' %}
+{% set conclusion_title = 'Fault Patterns Detected – Attention Required' %}
+{% set conclusion_color = 'var(--accent-red)' %}
+{% elif acc >= 0.75 %}
+{% set conclusion_class = 'warning' %}
+{% set conclusion_icon = '🔶' %}
+{% set conclusion_title = 'Moderate Performance – Monitor Closely' %}
+{% set conclusion_color = 'var(--accent-yellow)' %}
+{% else %}
+{% set conclusion_class = 'warning' %}
+{% set conclusion_icon = '⚠️' %}
+{% set conclusion_title = 'Low Accuracy – Model May Need More Data' %}
+{% set conclusion_color = 'var(--accent-yellow)' %}
+{% endif %}
+
+<div class="conclusion-block {{ conclusion_class }}">
+  <div class="conclusion-status">
+    <span class="conclusion-icon">{{ conclusion_icon }}</span>
+    <span style="color:{{ conclusion_color }};">{{ conclusion_title }}</span>
+  </div>
+  <div class="conclusion-detail">
+    {% if conclusion_class == 'normal' %}
+    The RandomForestClassifier achieved a
+    <strong>{{ (acc * 100) | round(2) }}% accuracy</strong>
+    {% if auc is not none %}
+    with an impressive <strong>ROC AUC of {{ auc | round(4) }}</strong>,
+    {% endif %}
+    indicating the model can reliably distinguish normal operation from fault conditions.
+    {% if anomaly_rate is not none %}
+    The fault class represents only
+    <strong>{{ (anomaly_rate * 100) | round(1) }}%</strong> of the dataset,
+    suggesting the motor is predominantly in healthy operation.
+    {% endif %}
+    This model is ready for deployment as an early-warning system.
+    {% elif conclusion_class == 'fault' %}
+    The model reports <strong>{{ (acc * 100) | round(2) }}% accuracy</strong>
+    {% if auc is not none %}
+    (AUC {{ auc | round(4) }})
+    {% endif %}
+    and has identified a significant fault-class proportion of
+    <strong>{{ (anomaly_rate * 100) | round(1) }}%</strong> in the dataset.
+    This suggests <strong>recurring or persistent fault conditions</strong>.
+    Immediate hardware inspection of the motor is recommended.
+    Review temperature and vibration trends for root-cause analysis.
+    {% else %}
+    The model achieved <strong>{{ (acc * 100) | round(2) }}% accuracy</strong>.
+    {% if auc is not none %}
+    ROC AUC: <strong>{{ auc | round(4) }}</strong>.
+    {% endif %}
+    Performance is moderate. Consider <strong>collecting more balanced training data</strong>,
+    feature engineering, or hyperparameter tuning to improve classification confidence.
+    Continue monitoring — do not rely solely on this model for critical decisions.
+    {% endif %}
+  </div>
+</div>
+
+{% else %}
+<!-- No results yet -->
+<div class="glass-card anim-slide-up delay-2" style="max-width:560px; text-align:center; padding:2.5rem 2rem;">
+  <div style="font-size:3.5rem; line-height:1; margin-bottom:1rem;">🤖</div>
+  <h3 style="font-size:1.1rem; font-weight:700; color:var(--text-primary); margin-bottom:0.5rem;">No Training Results
+    Yet</h3>
+  <p style="font-size:0.875rem; color:var(--text-secondary); margin-bottom:1.25rem;">
+    Upload a CSV dataset and train a model to see accuracy,
+    plots, and an intelligent system conclusion here.
+  </p>
+  <a href="{{ url_for('dashboard_upload') }}" class="btn btn-primary">
+    <i class="bi bi-cloud-upload"></i> Upload Dataset
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}

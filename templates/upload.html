@@ -1,0 +1,86 @@
+{% extends "layout.html" %}
+
+{% block title %}Upload & Train – MotorAI{% endblock %}
+
+{% block content %}
+
+<!-- Training overlay (shown on form submit) -->
+<div id="training-overlay">
+    <div class="training-spinner"></div>
+    <div class="training-title">Training AI Model…</div>
+    <p class="training-sub" id="trainingStep">Initialising pipeline…</p>
+    <div class="training-progress-wrap">
+        <div class="training-progress-label">
+            <span>Progress</span>
+            <span id="trainingPct">0%</span>
+        </div>
+        <div class="progress-bar-outer">
+            <div class="progress-bar-inner" id="trainingBar" style="width:0%;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Page header -->
+<div class="page-header anim-slide-up delay-1">
+    <h1 class="page-title"><i class="bi bi-cloud-upload me-2 text-accent"></i>Upload &amp; Train</h1>
+    <p class="page-subtitle">Upload a CSV dataset to retrain the RandomForest model.</p>
+</div>
+
+<!-- Flash messages -->
+{% if message %}
+<div class="alert alert-success anim-slide-up delay-2">
+    <i class="bi bi-check-circle-fill me-1"></i> {{ message }}
+    <a href="{{ url_for('dashboard') }}" style="color:var(--accent-green); font-weight:600; margin-left:0.5rem;">View
+        Results →</a>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="alert alert-danger anim-slide-up delay-2">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i> {{ error }}
+</div>
+{% endif %}
+
+<!-- Upload card -->
+<div class="glass-card anim-slide-up delay-3" style="max-width:640px;">
+    <div class="glass-card-header">
+        <i class="bi bi-file-earmark-spreadsheet" style="color:var(--accent-cyan);"></i>
+        <h3>CSV Dataset</h3>
+    </div>
+    <div class="glass-card-body">
+
+        <p style="font-size:0.85rem; color:var(--text-secondary); margin-bottom:1.25rem;">
+            Your CSV must contain the following columns:
+            <code style="color:var(--accent-cyan);">temperature</code>,
+            <code style="color:var(--accent-cyan);">vibration</code>,
+            <code style="color:var(--accent-cyan);">label</code>.
+            Minimum 10 rows required.
+        </p>
+
+        <form method="post" enctype="multipart/form-data" id="trainingForm" novalidate>
+
+            <!-- Drag-and-drop upload zone -->
+            <div class="upload-zone" id="dropZone">
+                <div class="upload-icon">📂</div>
+                <div class="upload-title">Drag &amp; drop your CSV here</div>
+                <div class="upload-sub" id="fileLabel">or click to browse files</div>
+            </div>
+
+            <!-- Hidden file input -->
+            <input type="file" id="csvFile" name="csv_file" accept=".csv" required style="display:none;">
+
+            <ol style="font-size:0.8rem; color:var(--text-muted); margin:1rem 0 1.35rem; padding-left:1.25rem;">
+                <li>Select or drop your dataset CSV.</li>
+                <li>Click <strong style="color:var(--text-primary);">Train Model</strong> to begin training.</li>
+                <li>Open the <strong style="color:var(--text-primary);">Results</strong> page to view metrics and plots.
+                </li>
+            </ol>
+
+            <button type="submit" class="btn btn-primary btn-block" id="trainBtn">
+                <i class="bi bi-cpu"></i> Train Model
+            </button>
+        </form>
+    </div>
+</div>
+
+{% endblock %}

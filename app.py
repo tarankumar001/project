@@ -1,215 +1,226 @@
 """
 Motor Fault Detection Web App (Flask) + ML Admin Dashboard
+===========================================================
 
-Part 1 (existing):
-- Loads trained model from motor_model.csv using joblib
-- Connects to Arduino on COM3 (9600 baud)
-- Arduino sends two lines:
-    1) temperature (float)
-    2) vibration value (float)
-- Uses temperature and vibration as features for prediction
-- Shows MOTOR NORMAL (green) or MOTOR FAULT (red) on a web page
-- Page auto-refreshes every 2 seconds
+Architecture:
+  - Authentication (login / register / logout)  →  SQLite users table
+  - Model Training                              →  RandomForestClassifier on uploaded CSV
+  - Diagnostic Plots                            →  ROC Curve, Confusion Matrix, Feature Importance
+  - Training Logs                               →  SQLite training_logs table
+  - Live Monitor                                →  Arduino serial → ML prediction
 
-Part 2 (admin dashboard):
-- Web UI to upload CSV file with columns: temperature, vibration, label
-- Trains a RandomForestClassifier on uploaded data
-- Shows Accuracy, Confusion Matrix, ROC Curve, Feature Importance
-- Saves plots into static/plots and model into motor_model.csv
+Run with:
+    python app.py
 """
 
-from flask import (
-    Flask,
-    render_template,
-    render_template_string,
-    request,
-    redirect,
-    url_for,
-    session,
-)
-import serial
-import joblib
-import numpy as np
-import time
+# ──────────────────────────────────────────────
+# Standard library
+# ──────────────────────────────────────────────
+import datetime
 import os
 import sqlite3
+import time
 from functools import wraps
-import datetime
 
-from werkzeug.security import generate_password_hash, check_password_hash
-
+# ──────────────────────────────────────────────
+# Third-party
+# ──────────────────────────────────────────────
+import joblib
+import matplotlib
+matplotlib.use("Agg")          # non-GUI backend; must be before plt import
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
+import serial
+from flask import (
+    Flask,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
-    roc_curve,
     roc_auc_score,
+    roc_curve,
 )
-
-import matplotlib
-
-# Use a non-GUI backend so plotting works on servers
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from werkzeug.security import check_password_hash, generate_password_hash
 
 
-# ==== Configuration ====
+# ══════════════════════════════════════════════
+#  CONFIGURATION
+# ══════════════════════════════════════════════
+
 SERIAL_PORT = "COM3"
-BAUD_RATE = 9600
-MODEL_PATH = "motor_model.pkl"
-PLOTS_DIR = os.path.join("static", "plots")
-DATABASE = os.path.join(os.path.dirname(__file__), "users.db")
+BAUD_RATE   = 9600
+MODEL_PATH  = os.path.join(os.path.dirname(__file__), "motor_model.pkl")
+PLOTS_DIR   = os.path.join("static", "plots")
+DATABASE    = os.path.join(os.path.dirname(__file__), "users.db")
 
-# Global objects (reused to keep things simple)
-model = None
-ser = None
-last_training_results = None  # store last training metrics for dashboard
-
+# ──────────────────────────────────────────────
+# Flask application
+# ──────────────────────────────────────────────
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "change-this-secret-key"  # for sessions; replace in production
+app.config["SECRET_KEY"] = "change-this-to-a-long-random-secret-in-production"
+
+# Global state (simple in-process storage)
+model                = None   # Loaded/trained ML model
+ser                  = None   # Serial connection to Arduino
+last_training_results = None  # Last training metrics dict
 
 
-def log_training_attempt(username, train_out):
-    """Store a single training run in the training_logs table."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        created_at = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-        cur.execute(
-            """
-            INSERT INTO training_logs (
-                created_at,
-                username,
-                accuracy,
-                n_samples,
-                n_train,
-                n_test,
-                anomaly_rate,
-                roc_auc
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                created_at,
-                username,
-                float(train_out.get("accuracy", 0.0)),
-                int(train_out.get("n_samples", 0)),
-                int(train_out.get("n_train", 0)),
-                int(train_out.get("n_test", 0)),
-                float(train_out.get("anomaly_rate") or 0.0)
-                if train_out.get("anomaly_rate") is not None
-                else None,
-                float(train_out.get("roc_auc", 0.0))
-                if train_out.get("roc_auc") is not None
-                else None,
-            ),
-        )
-        conn.commit()
-        conn.close()
-    except Exception as exc:
-        # Log to console; we don't want logging errors to break the UI
-        print(f"Failed to write training log: {exc}")
-
+# ══════════════════════════════════════════════
+#  DATABASE HELPERS
+# ══════════════════════════════════════════════
 
 def get_db_connection():
-    """Create a new connection to the SQLite database."""
+    """Open a new SQLite connection using Row factory for dict-like access."""
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     return conn
 
 
 def init_db():
-    """Create database tables if they do not exist."""
+    """Create database tables if they do not exist yet."""
     conn = get_db_connection()
-    cur = conn.cursor()
+    cur  = conn.cursor()
+
     # Users table
-    cur.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT    UNIQUE NOT NULL,
+            password_hash TEXT    NOT NULL
         )
-        """
-    )
+    """)
+
     # Training logs table
-    cur.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS training_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            username TEXT NOT NULL,
-            accuracy REAL,
-            n_samples INTEGER,
-            n_train INTEGER,
-            n_test INTEGER,
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at   TEXT    NOT NULL,
+            username     TEXT    NOT NULL,
+            accuracy     REAL,
+            n_samples    INTEGER,
+            n_train      INTEGER,
+            n_test       INTEGER,
             anomaly_rate REAL,
-            roc_auc REAL
+            roc_auc      REAL
         )
-        """
-    )
+    """)
+
     conn.commit()
+
+    # ── Seed default admin account (only if it doesn't already exist) ──
+    cur.execute("SELECT id FROM users WHERE username = ?", ("admin",))
+    if not cur.fetchone():
+        admin_hash = generate_password_hash("password")
+        cur.execute(
+            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+            ("admin", admin_hash),
+        )
+        conn.commit()
+        print("[init_db] Default admin account created (username: admin / password: password)")
+    else:
+        print("[init_db] Admin account already exists.")
+
     conn.close()
 
 
+def log_training_attempt(username, train_out):
+    """
+    Persist a single training run's metrics to the training_logs table.
+    Silently swallows errors so a logging failure never breaks the UI.
+    """
+    try:
+        conn = get_db_connection()
+        cur  = conn.cursor()
+        created_at = datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+
+        cur.execute("""
+            INSERT INTO training_logs
+                (created_at, username, accuracy, n_samples,
+                 n_train, n_test, anomaly_rate, roc_auc)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            created_at,
+            username,
+            float(train_out.get("accuracy", 0.0)),
+            int(train_out.get("n_samples", 0)),
+            int(train_out.get("n_train",   0)),
+            int(train_out.get("n_test",    0)),
+            float(train_out["anomaly_rate"]) if train_out.get("anomaly_rate") is not None else None,
+            float(train_out["roc_auc"])      if train_out.get("roc_auc")      is not None else None,
+        ))
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        print(f"[log_training_attempt] Failed to write log: {exc}")
+
+
+# ══════════════════════════════════════════════
+#  AUTHENTICATION HELPERS
+# ══════════════════════════════════════════════
+
 def login_required(view_func):
-    """Decorator to restrict access to logged-in users only."""
+    """Decorator: redirect to login page if the user is not authenticated."""
     @wraps(view_func)
-    def wrapped_view(**kwargs):
+    def wrapped(**kwargs):
         if "user_id" not in session:
             return redirect(url_for("login", next=request.path))
         return view_func(**kwargs)
-
-    return wrapped_view
+    return wrapped
 
 
 @app.context_processor
 def inject_user():
-    """Make logged-in state available in all templates."""
+    """Inject authentication state into every template context."""
     return {
-        "logged_in": "user_id" in session,
+        "logged_in":    "user_id" in session,
         "current_user": session.get("username"),
     }
 
 
-# ========== AUTHENTICATION ROUTES ==========
+# ══════════════════════════════════════════════
+#  AUTHENTICATION ROUTES
+# ══════════════════════════════════════════════
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    """User registration page."""
-    error = None
+    """User registration — hashes password with werkzeug before storing."""
+    error   = None
     message = None
 
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "").strip()
-        confirm = request.form.get("confirm_password", "").strip()
+        confirm  = request.form.get("confirm_password", "").strip()
 
         if not username or not password or not confirm:
             error = "Please fill in all fields."
         elif password != confirm:
             error = "Passwords do not match."
         elif len(password) < 4:
-            error = "Password should be at least 4 characters long."
+            error = "Password must be at least 4 characters."
         else:
             try:
                 conn = get_db_connection()
-                cur = conn.cursor()
+                cur  = conn.cursor()
                 cur.execute("SELECT id FROM users WHERE username = ?", (username,))
-                existing = cur.fetchone()
-                if existing:
-                    error = "Username is already taken. Please choose another one."
+                if cur.fetchone():
+                    error = "Username already taken. Please choose another."
                 else:
-                    password_hash = generate_password_hash(password)
+                    pw_hash = generate_password_hash(password)
                     cur.execute(
                         "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                        (username, password_hash),
+                        (username, pw_hash),
                     )
                     conn.commit()
-                    message = "Registration successful. You can now log in."
+                    message = "Registration successful. You can now sign in."
                 conn.close()
             except Exception as exc:
                 error = f"Registration failed: {exc}"
@@ -219,7 +230,7 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """User login page."""
+    """User login — validates credentials and creates a session."""
     error = None
 
     if request.method == "POST":
@@ -231,7 +242,7 @@ def login():
         else:
             try:
                 conn = get_db_connection()
-                cur = conn.cursor()
+                cur  = conn.cursor()
                 cur.execute(
                     "SELECT id, username, password_hash FROM users WHERE username = ?",
                     (username,),
@@ -240,15 +251,14 @@ def login():
                 conn.close()
 
                 if row and check_password_hash(row["password_hash"], password):
-                    # Login successful
-                    session["user_id"] = row["id"]
+                    session["user_id"]  = row["id"]
                     session["username"] = row["username"]
                     next_page = request.args.get("next")
-                    return redirect(next_page or url_for("dashboard"))
+                    return redirect(next_page or url_for("dashboard_upload"))
                 else:
                     error = "Invalid username or password."
             except Exception as exc:
-                error = f"Login failed: {exc}"
+                error = f"Login error: {exc}"
 
     return render_template("login.html", error=error)
 
@@ -256,658 +266,334 @@ def login():
 @app.route("/logout")
 @login_required
 def logout():
-    """Log the current user out and clear the session."""
+    """Clear session and redirect to login."""
     session.clear()
     return redirect(url_for("login"))
 
 
+# ══════════════════════════════════════════════
+#  ML — TRAINING LOGIC
+# ══════════════════════════════════════════════
+
+def train_model_from_dataframe(df):
+    """
+    Train a RandomForestClassifier on the supplied DataFrame.
+
+    Expected columns: temperature, vibration, label
+
+    Returns a dict with:
+        model, accuracy, cm, classes, roc_auc, plots,
+        n_samples, n_train, n_test, class_counts,
+        anomaly_label, anomaly_rate
+    """
+    # ── Validation ──────────────────────────────────
+    required_cols = {"temperature", "vibration", "label"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV missing required columns: {', '.join(missing)}")
+
+    if len(df) < 10:
+        raise ValueError("Need at least 10 rows to train. Please provide more data.")
+
+    # ── Feature engineering ─────────────────────────
+    df["vib_rms"] = df["vibration"].astype(float)
+    X = df[["temperature", "vib_rms"]].astype(float)
+    y = df["label"]
+
+    if y.nunique() < 2:
+        raise ValueError("Need at least two distinct label values for classification.")
+
+    # ── Train / test split ──────────────────────────
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y,
+        test_size    = 0.2,
+        random_state = 42,
+        stratify     = y,
+    )
+
+    # ── Model training ──────────────────────────────
+    clf = RandomForestClassifier(n_estimators=100, random_state=42)
+    clf.fit(X_train, y_train)
+
+    # ── Predictions ─────────────────────────────────
+    y_pred  = clf.predict(X_test)
+    y_proba = clf.predict_proba(X_test)
+
+    # ── Metrics ─────────────────────────────────────
+    acc      = accuracy_score(y_test, y_pred)
+    cm       = confusion_matrix(y_test, y_pred)
+    classes  = sorted(y.unique().tolist())
+
+    n_samples    = len(df)
+    n_train      = len(X_train)
+    n_test       = len(X_test)
+    class_counts = y.value_counts().to_dict()
+
+    # ── ROC (binary only) ───────────────────────────
+    roc_auc      = None
+    fpr = tpr    = None
+    anomaly_label = None
+    anomaly_rate  = None
+
+    if len(classes) == 2:
+        anomaly_label   = classes[1]         # second class treated as "fault"
+        y_test_binary   = (y_test == anomaly_label).astype(int)
+        fpr, tpr, _     = roc_curve(y_test_binary, y_proba[:, 1])
+        roc_auc         = roc_auc_score(y_test_binary, y_proba[:, 1])
+        anomaly_count   = class_counts.get(anomaly_label, 0)
+        anomaly_rate    = anomaly_count / float(n_samples) if n_samples > 0 else None
+
+    # ── Plot generation ─────────────────────────────
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+    plt.style.use("dark_background")        # dark plots to match dashboard theme
+    plots = {}
+
+    # Confusion matrix
+    fig, ax = plt.subplots(figsize=(4.5, 4))
+    fig.patch.set_facecolor("#0d1117")
+    im = ax.imshow(cm, interpolation="nearest", cmap="Blues")
+    fig.colorbar(im, ax=ax)
+    ax.set_title("Confusion Matrix", color="#e6edf3", fontsize=12, pad=10)
+    tick_marks = np.arange(len(classes))
+    ax.set_xticks(tick_marks)
+    ax.set_xticklabels(classes, color="#94a3b8")
+    ax.set_yticks(tick_marks)
+    ax.set_yticklabels(classes, color="#94a3b8")
+    ax.set_xlabel("Predicted", color="#94a3b8")
+    ax.set_ylabel("Actual",    color="#94a3b8")
+    ax.tick_params(colors="#94a3b8")
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            ax.text(j, i, str(cm[i, j]), ha="center", va="center",
+                    color="white" if cm[i, j] > cm.max() / 2.0 else "#94a3b8", fontsize=13)
+    cm_path = os.path.join(PLOTS_DIR, "confusion_matrix.png")
+    plt.tight_layout()
+    plt.savefig(cm_path, dpi=130, facecolor=fig.get_facecolor())
+    plt.close()
+    plots["confusion_matrix"] = "plots/confusion_matrix.png"
+
+    # ROC curve
+    if roc_auc is not None and fpr is not None and tpr is not None:
+        fig, ax = plt.subplots(figsize=(4.5, 4))
+        fig.patch.set_facecolor("#0d1117")
+        ax.plot(fpr, tpr, color="#4f9cf9", linewidth=2,
+                label=f"AUC = {roc_auc:.4f}")
+        ax.plot([0, 1], [0, 1], "k--", alpha=0.5, label="Random")
+        ax.set_xlim([0, 1])
+        ax.set_ylim([0, 1.05])
+        ax.set_xlabel("False Positive Rate", color="#94a3b8")
+        ax.set_ylabel("True Positive Rate",  color="#94a3b8")
+        ax.set_title("ROC Curve", color="#e6edf3", fontsize=12, pad=10)
+        ax.tick_params(colors="#94a3b8")
+        ax.legend(loc="lower right", facecolor="#161b22", labelcolor="#e6edf3")
+        ax.set_facecolor("#0d1117")
+        roc_path = os.path.join(PLOTS_DIR, "roc_curve.png")
+        plt.tight_layout()
+        plt.savefig(roc_path, dpi=130, facecolor=fig.get_facecolor())
+        plt.close()
+        plots["roc_curve"] = "plots/roc_curve.png"
+
+    # Feature importance
+    importances   = clf.feature_importances_
+    feature_names = ["temperature", "vib_rms"]
+    fig, ax = plt.subplots(figsize=(4.5, 3))
+    fig.patch.set_facecolor("#0d1117")
+    colors = ["#4f9cf9", "#a78bfa"]
+    y_pos  = np.arange(len(feature_names))
+    ax.barh(y_pos, importances, align="center", color=colors)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(feature_names, color="#94a3b8")
+    ax.set_xlabel("Importance", color="#94a3b8")
+    ax.set_title("Feature Importance", color="#e6edf3", fontsize=12, pad=10)
+    ax.tick_params(colors="#94a3b8")
+    ax.set_facecolor("#0d1117")
+    fi_path = os.path.join(PLOTS_DIR, "feature_importance.png")
+    plt.tight_layout()
+    plt.savefig(fi_path, dpi=130, facecolor=fig.get_facecolor())
+    plt.close()
+    plots["feature_importance"] = "plots/feature_importance.png"
+
+    # ── Save model ──────────────────────────────────
+    joblib.dump(clf, MODEL_PATH)
+    print(f"[train_model] Model saved → {MODEL_PATH}")
+
+    return {
+        "model":        clf,
+        "accuracy":     acc,
+        "cm":           cm,
+        "classes":      classes,
+        "roc_auc":      roc_auc,
+        "plots":        plots,
+        "n_samples":    n_samples,
+        "n_train":      n_train,
+        "n_test":       n_test,
+        "class_counts": class_counts,
+        "anomaly_label": anomaly_label,
+        "anomaly_rate":  anomaly_rate,
+    }
+
+
+# ══════════════════════════════════════════════
+#  SERIAL / MODEL HELPERS  (Live Monitor)
+# ══════════════════════════════════════════════
+
 def load_model():
-    """
-    Load the trained machine learning model from disk.
-    Returns the model object, or None if loading fails.
-    """
+    """Load the trained ML model from disk. Returns model or None."""
     try:
         if not os.path.exists(MODEL_PATH):
-            print(f"Model file '{MODEL_PATH}' not found. Please run training first.")
+            print(f"[load_model] '{MODEL_PATH}' not found.")
             return None
-
-        loaded_model = joblib.load(MODEL_PATH)
-        print(f"Model loaded successfully from '{MODEL_PATH}'.")
-        return loaded_model
-    except Exception as e:
-        print(f"Error loading model: {e}")
+        m = joblib.load(MODEL_PATH)
+        print(f"[load_model] Model loaded from '{MODEL_PATH}'.")
+        return m
+    except Exception as exc:
+        print(f"[load_model] Error: {exc}")
         return None
 
 
 def get_serial_connection():
-    """
-    Create (or reuse) a serial connection to the Arduino.
-    Returns a serial object or None if connection fails.
-    """
+    """Open (or reuse) a serial connection to the Arduino."""
     global ser
-
-    # If we already have an open connection, reuse it
     if ser is not None and ser.is_open:
         return ser
-
     try:
         ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
-        # Small delay so Arduino can reset and start sending data
-        time.sleep(2)
-        print(f"Connected to Arduino on {SERIAL_PORT} at {BAUD_RATE} baud.")
+        time.sleep(2)  # allow Arduino to reset
+        print(f"[serial] Connected on {SERIAL_PORT} @ {BAUD_RATE} baud.")
         return ser
-    except serial.SerialException as e:
-        print(f"Serial error: {e}")
+    except serial.SerialException as exc:
+        print(f"[serial] SerialException: {exc}")
         return None
-    except Exception as e:
-        print(f"Unexpected error opening serial port: {e}")
+    except Exception as exc:
+        print(f"[serial] Unexpected error: {exc}")
         return None
 
 
 def read_sensor_data(ser_conn):
     """
     Read two lines from Arduino:
-      1) temperature (float)
-      2) vibration (float)
+      Line 1 → temperature (float)
+      Line 2 → vibration   (float)
 
-    Returns:
-        (temperature, vibration, error_message)
-        - temperature (float or None)
-        - vibration (float or None)
-        - error_message (str or None)
+    Returns (temperature, vibration, error_msg).
     """
     try:
-        # Line 1: temperature
         temp_line = ser_conn.readline().decode("utf-8").strip()
         if not temp_line:
-            return None, None, "No temperature data received"
+            return None, None, "No temperature data received."
 
-        # Line 2: vibration
         vib_line = ser_conn.readline().decode("utf-8").strip()
         if not vib_line:
-            return None, None, "No vibration data received"
+            return None, None, "No vibration data received."
 
-        # Convert to floats
         try:
             temperature = float(temp_line)
         except ValueError:
-            return None, None, f"Could not parse temperature from '{temp_line}'"
+            return None, None, f"Cannot parse temperature: '{temp_line}'"
 
         try:
             vibration = float(vib_line)
         except ValueError:
-            return None, None, f"Could not parse vibration from '{vib_line}'"
+            return None, None, f"Cannot parse vibration: '{vib_line}'"
 
         return temperature, vibration, None
 
     except serial.SerialTimeoutException:
-        return None, None, "Serial read timeout"
+        return None, None, "Serial read timeout."
     except UnicodeDecodeError:
-        return None, None, "Received non-text data from serial"
-    except Exception as e:
-        return None, None, f"Error reading from serial: {e}"
+        return None, None, "Received non-text data from serial port."
+    except Exception as exc:
+        return None, None, f"Serial read error: {exc}"
 
 
 def predict_status(temperature, vibration):
-    """
-    Use the trained model to predict motor status.
-    Returns:
-        prediction (int or None)
-    """
+    """Run the loaded model and return integer prediction (or None on error)."""
     if model is None:
         return None
-
     try:
-        # Model expects a 2D array: [[temperature, vibration]]
         features = np.array([[temperature, vibration]])
-        prediction = model.predict(features)[0]
-        return int(prediction)
-    except Exception as e:
-        print(f"Prediction error: {e}")
+        return int(model.predict(features)[0])
+    except Exception as exc:
+        print(f"[predict_status] {exc}")
         return None
 
 
-@app.route("/monitor")
-def index():
-    """
-    Live motor fault detection page:
-    - Reads the latest sensor values
-    - Runs prediction
-    - Returns a minimal HTML page that auto-refreshes every 2 seconds
-    """
-    # Default display values
-    temperature = None
-    vibration = None
-    status_text = "WAITING"
-    status_color = "#7f8c8d"  # grey
-    error_msg = None
-
-    # Check model
-    if model is None:
-        error_msg = "Model not loaded. Please ensure 'motor_model.pkl' exists."
-    else:
-        # Get (or open) serial connection
-        ser_conn = get_serial_connection()
-        if ser_conn is None:
-            error_msg = f"Could not open serial port {SERIAL_PORT}."
-        else:
-            # Read data from Arduino
-            temperature, vibration, error_msg = read_sensor_data(ser_conn)
-
-            if error_msg is None and temperature is not None and vibration is not None:
-                # Make prediction
-                prediction = predict_status(temperature, vibration)
-
-                if prediction is None:
-                    status_text = "PREDICTION ERROR"
-                    status_color = "#e67e22"  # orange
-                else:
-                    if prediction == 0:
-                        status_text = "MOTOR NORMAL"
-                        status_color = "#2ecc71"  # green
-                    elif prediction == 1:
-                        status_text = "MOTOR FAULT"
-                        status_color = "#e74c3c"  # red
-                    else:
-                        # Any other label is treated as fault-like
-                        status_text = f"STATUS: {prediction}"
-                        status_color = "#e74c3c"
-            else:
-                # We had a read error; keep "WAITING" text but set color to orange
-                status_text = "NO DATA"
-                status_color = "#f39c12"  # yellow/orange
-
-    # Prepare optional error HTML (to keep the main f-string simple)
-    error_html = f'<div class="error">{error_msg}</div>' if error_msg else ""
-
-    # Build simple HTML with inline CSS
-    html = f"""
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Motor Fault Detection</title>
-    <!-- Auto-refresh every 2 seconds -->
-    <meta http-equiv="refresh" content="2">
-    <style>
-      body {{
-        margin: 0;
-        padding: 0;
-        font-family: Arial, sans-serif;
-        background-color: #f4f4f4;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        height: 100vh;
-      }}
-      .card {{
-        background-color: #ffffff;
-        padding: 24px 32px;
-        border-radius: 8px;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        min-width: 320px;
-        text-align: center;
-      }}
-      h1 {{
-        margin-top: 0;
-        margin-bottom: 16px;
-        font-size: 24px;
-        color: #333333;
-      }}
-      .value-row {{
-        margin: 8px 0;
-        font-size: 18px;
-      }}
-      .label {{
-        font-weight: bold;
-        margin-right: 8px;
-      }}
-      .status {{
-        margin-top: 18px;
-        padding: 12px;
-        border-radius: 6px;
-        font-size: 20px;
-        font-weight: bold;
-        color: #ffffff;
-        background-color: {status_color};
-      }}
-      .error {{
-        margin-top: 10px;
-        color: #e74c3c;
-        font-size: 14px;
-      }}
-      .footer {{
-        margin-top: 12px;
-        font-size: 12px;
-        color: #888888;
-      }}
-    </style>
-  </head>
-  <body>
-    <div class="card">
-      <h1>Motor Fault Detection</h1>
-
-      <div class="value-row">
-        <span class="label">Temperature:</span>
-        <span>{f"{temperature:.2f} °C" if temperature is not None else "N/A"}</span>
-      </div>
-
-      <div class="value-row">
-        <span class="label">Vibration:</span>
-        <span>{f"{vibration:.3f}" if vibration is not None else "N/A"}</span>
-      </div>
-
-      <div class="status">{status_text}</div>
-
-      {error_html}
-
-      <div class="footer">
-        Page auto-refreshes every 2 seconds.
-      </div>
-    </div>
-  </body>
-  </html>
-"""
-
-    return html
-
-
-def train_model_from_dataframe(df):
-    """
-    Train a RandomForest model from a pandas DataFrame.
-    The DataFrame must contain: temperature, vibration, label.
-
-    Returns a dictionary with:
-      - model: trained model
-      - accuracy: float
-      - cm: confusion matrix (2D array)
-      - classes: list of class labels
-      - roc_auc: float or None
-      - plots: dict of plot filenames
-      - n_samples: total number of rows
-      - n_train: number of training samples
-      - n_test: number of test samples
-      - class_counts: dict mapping label -> count
-    """
-    # Basic validation
-    required_cols = {"temperature", "vibration", "label"}
-    missing = required_cols - set(df.columns)
-    if missing:
-        raise ValueError(f"CSV is missing required columns: {', '.join(missing)}")
-
-    if len(df) < 10:
-        raise ValueError("Not enough rows in CSV. Please provide at least 10 rows.")
-
-    # "Compute" vibration RMS (here we assume vibration column already stores RMS)
-    # For clarity we copy it into a new column.
-    df["vib_rms"] = df["vibration"].astype(float)
-
-    # Features and target
-    X = df[["temperature", "vib_rms"]].astype(float)
-    y = df["label"]
-
-    if y.nunique() < 2:
-        raise ValueError("Need at least two different label values for classification.")
-
-    # Train / test split
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        random_state=42,
-        stratify=y,
-    )
-
-    # Train RandomForestClassifier
-    clf = RandomForestClassifier(
-        n_estimators=100,
-        random_state=42,
-    )
-    clf.fit(X_train, y_train)
-
-    # Predictions
-    y_pred = clf.predict(X_test)
-    y_proba = clf.predict_proba(X_test)
-
-    # Metrics
-    acc = accuracy_score(y_test, y_pred)
-    cm = confusion_matrix(y_test, y_pred)
-    classes = list(sorted(y.unique()))
-
-    # Sample counts for dashboard display
-    n_samples = len(df)
-    n_train = len(X_train)
-    n_test = len(X_test)
-    class_counts = y.value_counts().to_dict()
-
-    # ROC curve (only for binary classification)
-    roc_auc = None
-    fpr = tpr = None
-    anomaly_label = None
-    anomaly_rate = None
-    if len(classes) == 2:
-        anomaly_label = classes[1]  # treat the second class as "anomaly/fault"
-        y_test_binary = (y_test == anomaly_label).astype(int)
-        fpr, tpr, _ = roc_curve(y_test_binary, y_proba[:, 1])
-        roc_auc = roc_auc_score(y_test_binary, y_proba[:, 1])
-
-        # Approximate anomaly rate in full dataset
-        anomaly_count = class_counts.get(anomaly_label, 0)
-        anomaly_rate = anomaly_count / float(n_samples) if n_samples > 0 else None
-
-    # Ensure plots directory exists
-    os.makedirs(PLOTS_DIR, exist_ok=True)
-
-    plots = {}
-
-    # Confusion matrix plot
-    plt.figure(figsize=(4, 4))
-    plt.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
-    plt.title("Confusion Matrix")
-    plt.colorbar()
-    tick_marks = np.arange(len(classes))
-    plt.xticks(tick_marks, classes)
-    plt.yticks(tick_marks, classes)
-    plt.xlabel("Predicted label")
-    plt.ylabel("True label")
-    # Add numbers
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            plt.text(
-                j,
-                i,
-                str(cm[i, j]),
-                ha="center",
-                va="center",
-                color="white" if cm[i, j] > cm.max() / 2.0 else "black",
-            )
-    cm_path = os.path.join(PLOTS_DIR, "confusion_matrix.png")
-    plt.tight_layout()
-    plt.savefig(cm_path, dpi=120)
-    plt.close()
-    plots["confusion_matrix"] = "plots/confusion_matrix.png"
-
-    # ROC curve plot (if available)
-    if roc_auc is not None and fpr is not None and tpr is not None:
-        plt.figure(figsize=(4, 4))
-        plt.plot(fpr, tpr, label=f"ROC curve (AUC = {roc_auc:.3f})")
-        plt.plot([0, 1], [0, 1], "k--", label="Random")
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title("ROC Curve")
-        plt.legend(loc="lower right")
-        roc_path = os.path.join(PLOTS_DIR, "roc_curve.png")
-        plt.tight_layout()
-        plt.savefig(roc_path, dpi=120)
-        plt.close()
-        plots["roc_curve"] = "plots/roc_curve.png"
-
-    # Feature importance plot
-    importances = clf.feature_importances_
-    feature_names = ["temperature", "vib_rms"]
-
-    plt.figure(figsize=(4, 4))
-    y_pos = np.arange(len(feature_names))
-    plt.barh(y_pos, importances, align="center", color="#3498db")
-    plt.yticks(y_pos, feature_names)
-    plt.xlabel("Importance")
-    plt.title("Feature Importance")
-    fi_path = os.path.join(PLOTS_DIR, "feature_importance.png")
-    plt.tight_layout()
-    plt.savefig(fi_path, dpi=120)
-    plt.close()
-    plots["feature_importance"] = "plots/feature_importance.png"
-
-    # Save trained model
-    joblib.dump(clf, MODEL_PATH)
-
-    return {
-        "model": clf,
-        "accuracy": acc,
-        "cm": cm,
-        "classes": classes,
-        "roc_auc": roc_auc,
-        "plots": plots,
-        "n_samples": n_samples,
-        "n_train": n_train,
-        "n_test": n_test,
-        "class_counts": class_counts,
-        "anomaly_label": anomaly_label,
-        "anomaly_rate": anomaly_rate,
-    }
-
-
-# Simple Bootstrap-based admin dashboard template
-ADMIN_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ML Admin Dashboard</title>
-    <link
-      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
-      rel="stylesheet"
-    >
-  </head>
-  <body class="bg-light">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-      <div class="container-fluid">
-        <a class="navbar-brand" href="#">Motor ML Admin</a>
-        <div class="d-flex">
-          <a href="/" class="btn btn-outline-light btn-sm">Live Monitor</a>
-        </div>
-      </div>
-    </nav>
-
-    <div class="container">
-      <div class="row">
-        <div class="col-lg-4">
-          <div class="card mb-4">
-            <div class="card-header">
-              <strong>Upload Training Data (CSV)</strong>
-            </div>
-            <div class="card-body">
-              <form method="post" enctype="multipart/form-data">
-                <div class="mb-3">
-                  <label for="csvFile" class="form-label">CSV file</label>
-                  <input
-                    class="form-control"
-                    type="file"
-                    id="csvFile"
-                    name="csv_file"
-                    accept=".csv"
-                    required
-                  >
-                </div>
-                <p class="small text-muted mb-2">
-                  CSV must contain columns:
-                  <code>temperature</code>, <code>vibration</code>, <code>label</code>.
-                </p>
-                <button type="submit" class="btn btn-primary w-100">
-                  Train Model
-                </button>
-              </form>
-
-              {% if message %}
-              <div class="alert alert-success mt-3" role="alert">
-                {{ message }}
-              </div>
-              {% endif %}
-
-              {% if error %}
-              <div class="alert alert-danger mt-3" role="alert">
-                {{ error }}
-              </div>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-
-        <div class="col-lg-8">
-          <div class="card mb-4">
-            <div class="card-header">
-              <strong>Training Results</strong>
-            </div>
-            <div class="card-body">
-              {% if results %}
-                <p><strong>Accuracy:</strong> {{ (results.accuracy * 100) | round(2) }}%</p>
-
-                {% if results.roc_auc is not none %}
-                  <p><strong>ROC AUC:</strong> {{ results.roc_auc | round(4) }}</p>
-                {% endif %}
-
-                <div class="row mt-3">
-                  {% if 'confusion_matrix' in results.plots %}
-                  <div class="col-md-6 mb-3">
-                    <h6>Confusion Matrix</h6>
-                    <img
-                      src="{{ url_for('static', filename=results.plots.confusion_matrix) }}?v={{ cache_buster }}"
-                      class="img-fluid img-thumbnail"
-                      alt="Confusion Matrix"
-                    >
-                  </div>
-                  {% endif %}
-
-                  {% if 'roc_curve' in results.plots %}
-                  <div class="col-md-6 mb-3">
-                    <h6>ROC Curve</h6>
-                    <img
-                      src="{{ url_for('static', filename=results.plots.roc_curve) }}?v={{ cache_buster }}"
-                      class="img-fluid img-thumbnail"
-                      alt="ROC Curve"
-                    >
-                  </div>
-                  {% endif %}
-
-                  {% if 'feature_importance' in results.plots %}
-                  <div class="col-md-6 mb-3">
-                    <h6>Feature Importance</h6>
-                    <img
-                      src="{{ url_for('static', filename=results.plots.feature_importance) }}?v={{ cache_buster }}"
-                      class="img-fluid img-thumbnail"
-                      alt="Feature Importance"
-                    >
-                  </div>
-                  {% endif %}
-                </div>
-              {% else %}
-                <p class="text-muted mb-0">
-                  No results yet. Upload a CSV file to train a model.
-                </p>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </body>
-</html>
-"""
-
-
-@app.route("/admin", methods=["GET", "POST"])
-def admin_dashboard():
-    """
-    Simple ML admin dashboard:
-    - Upload CSV
-    - Train RandomForest
-    - Show metrics and plots
-    """
-    results = None
-    message = None
-    error = None
-
-    if request.method == "POST":
-        uploaded_file = request.files.get("csv_file")
-        if not uploaded_file or uploaded_file.filename == "":
-            error = "Please choose a CSV file to upload."
-        elif not uploaded_file.filename.lower().endswith(".csv"):
-            error = "Only .csv files are supported."
-        else:
-            try:
-                # Read CSV directly into pandas
-                df = pd.read_csv(uploaded_file)
-
-                train_out = train_model_from_dataframe(df)
-                results = type("Results", (), train_out)  # simple object-like access
-                message = "Model trained successfully and saved to 'motor_model.pkl'."
-            except Exception as exc:
-                error = f"Training failed: {exc}"
-
-    cache_buster = str(int(time.time()))
-
-    return render_template_string(
-        ADMIN_TEMPLATE,
-        results=results,
-        message=message,
-        error=error,
-        cache_buster=cache_buster,
-    )
-
+# ══════════════════════════════════════════════
+#  ROUTES
+# ══════════════════════════════════════════════
 
 @app.route("/")
 def home():
-    """Redirect users to upload page if logged in, otherwise to login."""
+    """Redirect to upload page if logged in, otherwise to login."""
     if "user_id" in session:
         return redirect(url_for("dashboard_upload"))
     return redirect(url_for("login"))
 
 
+# ── Dashboard: Upload & Train ────────────────
+
 @app.route("/dashboard/upload", methods=["GET", "POST"])
 @login_required
 def dashboard_upload():
     """
-    Page to upload CSV and train the model.
-    Metrics and plots will appear on the Results page.
+    Upload CSV → train RandomForest → store results in-memory + log to DB.
+    Renders upload.html (new template name).
     """
     global last_training_results
 
-    message = None
-    error = None
-    show_animation = False
+    message        = None
+    error          = None
 
     if request.method == "POST":
         uploaded_file = request.files.get("csv_file")
+
         if not uploaded_file or uploaded_file.filename == "":
-            error = "Please choose a CSV file to upload."
+            error = "Please select a CSV file."
         elif not uploaded_file.filename.lower().endswith(".csv"):
-            error = "Only .csv files are supported."
+            error = "Only .csv files are accepted."
         else:
             try:
-                df = pd.read_csv(uploaded_file)
+                df       = pd.read_csv(uploaded_file)
                 train_out = train_model_from_dataframe(df)
-                last_training_results = train_out  # persist across pages
-                # Log this attempt to the database
+
+                # Persist globally so the results page can read it
+                last_training_results = train_out
+
+                # Reload the global model so live monitor uses the new weights
+                global model
+                model = train_out["model"]
+
+                # Log to database
                 log_training_attempt(session.get("username", "unknown"), train_out)
 
-                message = "Model trained successfully and saved to 'motor_model.pkl'. Open the Results tab to view metrics."
-                show_animation = True
+                message = (
+                    f"Model trained successfully — Accuracy: "
+                    f"{train_out['accuracy']*100:.2f}%  |  "
+                    "Saved to motor_model.pkl."
+                )
             except Exception as exc:
                 error = f"Training failed: {exc}"
 
     return render_template(
-        "dashboard_upload.html",
+        "upload.html",
         message=message,
         error=error,
-        show_animation=show_animation,
     )
 
+
+# ── Dashboard: Results ───────────────────────
 
 @app.route("/dashboard")
 @app.route("/dashboard/results")
 @login_required
 def dashboard():
-    """
-    Results page: shows last training metrics and plots.
-    """
+    """Show last training metrics and plots."""
     global last_training_results
 
     results = None
     if last_training_results:
-        results = type("Results", (), last_training_results)
+        # Wrap dict in a lightweight object so templates use dot notation
+        results = type("Results", (), last_training_results)()
 
     cache_buster = str(int(time.time()))
 
@@ -918,42 +604,123 @@ def dashboard():
     )
 
 
+# ── Training Logs ────────────────────────────
+
 @app.route("/logs")
 @login_required
 def logs():
-    """Show history of training runs from the database."""
+    """Fetch training history from the database (most recent first)."""
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
+    cur  = conn.cursor()
+    cur.execute("""
         SELECT
-            created_at,
-            username,
-            accuracy,
-            n_samples,
-            n_train,
-            n_test,
-            anomaly_rate,
-            roc_auc
+            created_at, username, accuracy,
+            n_samples,  n_train,  n_test,
+            anomaly_rate, roc_auc
         FROM training_logs
         ORDER BY datetime(created_at) DESC
         LIMIT 50
-        """
-    )
+    """)
     rows = cur.fetchall()
     conn.close()
-
     return render_template("logs.html", logs=rows)
 
 
+# ── ML Implementation Info ───────────────────
+
+@app.route("/ml-info")
+@login_required
+def ml_info():
+    """Static page explaining the ML pipeline with code snippets."""
+    return render_template("ml_info.html")
+
+
+# ── Live Monitor ─────────────────────────────
+
+@app.route("/monitor")
+def index():
+    """
+    Live motor fault detection page.
+    Reads sensor data from Arduino, runs prediction, renders monitor.html.
+    The page does NOT use meta-refresh; instead app.js uses JS location.reload().
+    """
+    temperature  = None
+    vibration    = None
+    status_text  = "WAITING"
+    status_color = "#fbbf24"     # yellow
+    status_class = "status-waiting"
+    status_emoji = "⏳"
+    error_msg    = None
+
+    if model is None:
+        error_msg    = "Model not loaded. Run a training session first."
+        status_text  = "NO MODEL"
+        status_emoji = "🤖"
+    else:
+        ser_conn = get_serial_connection()
+        if ser_conn is None:
+            error_msg    = f"Could not open serial port {SERIAL_PORT}."
+            status_text  = "NO SERIAL"
+            status_emoji = "🔌"
+            status_color = "#fb923c"
+            status_class = "status-error"
+        else:
+            temperature, vibration, error_msg = read_sensor_data(ser_conn)
+
+            if error_msg is None and temperature is not None and vibration is not None:
+                prediction = predict_status(temperature, vibration)
+
+                if prediction is None:
+                    status_text  = "PREDICTION ERROR"
+                    status_color = "#fb923c"
+                    status_class = "status-error"
+                    status_emoji = "⚠️"
+                elif prediction == 0:
+                    status_text  = "MOTOR NORMAL"
+                    status_color = "#34d399"   # green
+                    status_class = "status-normal"
+                    status_emoji = "✅"
+                elif prediction == 1:
+                    status_text  = "MOTOR FAULT"
+                    status_color = "#f87171"   # red
+                    status_class = "status-fault"
+                    status_emoji = "🚨"
+                else:
+                    status_text  = f"STATUS: {prediction}"
+                    status_color = "#f87171"
+                    status_class = "status-fault"
+                    status_emoji = "⚠️"
+            else:
+                status_text  = "NO DATA"
+                status_color = "#fbbf24"
+                status_class = "status-waiting"
+                status_emoji = "📡"
+
+    return render_template(
+        "monitor.html",
+        temperature  = temperature,
+        vibration    = vibration,
+        status_text  = status_text,
+        status_color = status_color,
+        status_class = status_class,
+        status_emoji = status_emoji,
+        error_msg    = error_msg,
+    )
+
+
+# ══════════════════════════════════════════════
+#  ENTRY POINT
+# ══════════════════════════════════════════════
+
 if __name__ == "__main__":
-    # Initialize user database (creates table if needed)
+    # Initialise database tables
     init_db()
 
-    # Optionally load existing model at startup (for live monitor route)
+    # Try to load an existing model so live monitor works immediately
     model = load_model()
 
-    print("Starting Flask development server on http://127.0.0.1:5000")
-    # debug=True for easier development; set to False for production
-    app.run(debug=True)
+    print("=" * 58)
+    print("  MotorAI Dashboard  →  http://127.0.0.1:5000")
+    print("=" * 58)
 
+    app.run(debug=True, host="0.0.0.0", port=5000)

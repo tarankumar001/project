@@ -1,75 +1,131 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 
-{% block title %}Training Logs - Motor ML{% endblock %}
+{% block title %}Training Logs – MotorAI{% endblock %}
 
 {% block content %}
-  <div class="row justify-content-center">
-    <div class="col-lg-10">
-      <div class="card shadow-sm border-0 fade-in-up fade-delay-1">
-        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-          <strong>Training History</strong>
-          <span class="small text-muted">Most recent runs first</span>
-        </div>
-        <div class="card-body">
-          {% if logs %}
-          <div class="table-responsive">
-            <table class="table table-sm align-middle">
-              <thead class="table-light">
-                <tr>
-                  <th scope="col">Time (UTC)</th>
-                  <th scope="col">User</th>
-                  <th scope="col">Accuracy</th>
-                  <th scope="col">Samples</th>
-                  <th scope="col">Anomaly rate</th>
-                  <th scope="col">ROC AUC</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for row in logs %}
-                <tr>
-                  <td class="small text-muted">{{ row.created_at }}</td>
-                  <td>{{ row.username }}</td>
-                  <td>
-                    {% if row.accuracy is not none %}
-                      {{ (row.accuracy * 100) | round(2) }}%
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>
-                    {{ row.n_samples or 0 }}
-                    <span class="text-muted small d-block">
-                      T {{ row.n_train or 0 }} / V {{ row.n_test or 0 }}
-                    </span>
-                  </td>
-                  <td>
-                    {% if row.anomaly_rate is not none %}
-                      {{ (row.anomaly_rate * 100) | round(1) }}%
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>
-                    {% if row.roc_auc is not none %}
-                      {{ row.roc_auc | round(4) }}
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-          {% else %}
-            <p class="text-muted mb-0">
-              No training runs have been logged yet. Train a model from the
-              <strong>Upload</strong> tab and they will appear here.
-            </p>
-          {% endif %}
-        </div>
-      </div>
+
+<!-- Page header -->
+<div class="page-header anim-slide-up delay-1">
+  <h1 class="page-title"><i class="bi bi-journal-text me-2 text-accent"></i>Training Logs</h1>
+  <p class="page-subtitle">Complete history of all model training runs, sorted by most recent.</p>
+</div>
+
+{% if logs %}
+<!-- Stats summary row -->
+<div class="metric-grid" style="margin-bottom:1.5rem;">
+  <div class="metric-card anim-slide-up delay-1">
+    <div class="metric-icon metric-icon-blue"><i class="bi bi-list-check" style="font-size:1.2rem;"></i></div>
+    <div class="metric-content">
+      <div class="metric-label">Total Runs</div>
+      <div class="metric-value" data-counter="{{ logs | length }}" data-suffix="" data-decimals="0" data-duration="800">
+        {{ logs | length }}</div>
     </div>
   </div>
-{% endblock %}
+  <div class="metric-card anim-slide-up delay-2">
+    <div class="metric-icon metric-icon-green"><i class="bi bi-trophy" style="font-size:1.2rem;"></i></div>
+    <div class="metric-content">
+      <div class="metric-label">Best Accuracy</div>
+      {% set best_acc = namespace(val=0) %}
+      {% for row in logs %}
+      {% if row.accuracy is not none and row.accuracy > best_acc.val %}
+      {% set best_acc.val = row.accuracy %}
+      {% endif %}
+      {% endfor %}
+      <div class="metric-value" data-counter="{{ (best_acc.val * 100) | round(2) }}" data-suffix="%" data-decimals="1"
+        data-duration="1200">{{ (best_acc.val * 100) | round(2) }}%</div>
+    </div>
+  </div>
+  <div class="metric-card anim-slide-up delay-3">
+    <div class="metric-icon metric-icon-cyan"><i class="bi bi-people" style="font-size:1.2rem;"></i></div>
+    <div class="metric-content">
+      <div class="metric-label">Last Trained By</div>
+      <div class="metric-value" style="font-size:1rem;">{{ logs[0].username if logs else '—' }}</div>
+    </div>
+  </div>
+</div>
 
+<!-- Table card -->
+<div class="glass-card anim-slide-up delay-2">
+  <div class="glass-card-header" style="justify-content:space-between;">
+    <div style="display:flex;align-items:center;gap:0.5rem;">
+      <i class="bi bi-table" style="color:var(--accent-blue);"></i>
+      <h3>Run History</h3>
+    </div>
+    <span style="font-size:0.75rem; color:var(--text-muted);">Most recent first</span>
+  </div>
+  <div class="glass-card-body" style="padding:0; overflow-x:auto;">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Timestamp (UTC)</th>
+          <th>User</th>
+          <th>Accuracy</th>
+          <th>Samples</th>
+          <th>Split (Tr / Te)</th>
+          <th>Anomaly Rate</th>
+          <th>ROC AUC</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in logs %}
+        <tr style="animation-delay: {{ loop.index0 * 0.04 }}s;">
+          <td style="color:var(--text-muted); font-size:0.8rem; white-space:nowrap;">
+            <i class="bi bi-clock me-1"></i>{{ row.created_at }}
+          </td>
+          <td>
+            <span class="badge-pill">{{ row.username }}</span>
+          </td>
+          <td>
+            {% if row.accuracy is not none %}
+            {% set acc_pct = (row.accuracy * 100) | round(2) %}
+            {% if acc_pct >= 90 %}
+            <span class="acc-badge acc-badge-green">{{ acc_pct }}%</span>
+            {% elif acc_pct >= 75 %}
+            <span class="acc-badge acc-badge-yellow">{{ acc_pct }}%</span>
+            {% else %}
+            <span class="acc-badge acc-badge-red">{{ acc_pct }}%</span>
+            {% endif %}
+            {% else %}
+            <span style="color:var(--text-muted);">—</span>
+            {% endif %}
+          </td>
+          <td>{{ row.n_samples or 0 }}</td>
+          <td style="font-size:0.8rem; color:var(--text-muted);">
+            {{ row.n_train or 0 }} / {{ row.n_test or 0 }}
+          </td>
+          <td>
+            {% if row.anomaly_rate is not none %}
+            {{ (row.anomaly_rate * 100) | round(1) }}%
+            {% else %}
+            <span style="color:var(--text-muted);">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.roc_auc is not none %}
+            <span style="color:var(--accent-purple);">{{ row.roc_auc | round(4) }}</span>
+            {% else %}
+            <span style="color:var(--text-muted);">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% else %}
+<!-- Empty state -->
+<div class="glass-card anim-slide-up delay-2" style="max-width:480px; text-align:center; padding:2.5rem 2rem;">
+  <div style="font-size:3.5rem; line-height:1; margin-bottom:1rem;">📋</div>
+  <h3 style="font-size:1.05rem; font-weight:700; color:var(--text-primary); margin-bottom:0.5rem;">No Logs Yet</h3>
+  <p style="font-size:0.875rem; color:var(--text-secondary); margin-bottom:1.25rem;">
+    Training logs will appear here after you train your first model.
+  </p>
+  <a href="{{ url_for('dashboard_upload') }}" class="btn btn-primary">
+    <i class="bi bi-cloud-upload"></i> Train First Model
+  </a>
+</div>
+{% endif %}
+
+{% endblock %}

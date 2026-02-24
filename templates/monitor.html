@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block title %}Live Monitor – MotorAI{% endblock %}
+
+{% block content %}
+<div id="monitorPage">
+
+    <!-- Page header -->
+    <div class="page-header anim-slide-up delay-1">
+        <h1 class="page-title"><i class="bi bi-activity me-2 text-accent"></i>Live Motor Monitor</h1>
+        <p class="page-subtitle">
+            Real-time motor status via Arduino serial connection.
+            Auto-refreshing in <span id="refreshCountdown" style="color:var(--accent-cyan); font-weight:700;">2</span>s…
+        </p>
+    </div>
+
+    <!-- Status hero -->
+    <div class="glass-card anim-slide-up delay-2" style="max-width:520px; margin:0 auto 1.75rem;">
+        <div class="glass-card-body" style="text-align:center; padding:2.5rem 2rem;">
+
+            <!-- Animated status ring -->
+            <div class="status-ring-wrap {{ status_class }}" style="color:{{ status_color }};">
+                <div class="status-ring"></div>
+                <div class="status-ring-inner">
+                    {{ status_emoji }}
+                </div>
+            </div>
+
+            <div class="status-text {{ status_class }}">{{ status_text }}</div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.3rem;">
+                {% if status_text == 'MOTOR NORMAL' %}Motor operating within safe parameters.
+                {% elif status_text == 'MOTOR FAULT' %}Fault detected! Inspect the motor immediately.
+                {% elif status_text == 'WAITING' %}Waiting for sensor data…
+                {% elif status_text == 'NO DATA' %}No data received from sensor.
+                {% else %}{{ status_text }}
+                {% endif %}
+            </p>
+
+            {% if error_msg %}
+            <div class="alert alert-warning" style="text-align:left; margin-top:1rem;">
+                <i class="bi bi-exclamation-circle me-1"></i> {{ error_msg }}
+            </div>
+            {% endif %}
+
+        </div>
+    </div>
+
+    <!-- Sensor readings -->
+    <div class="sensor-grid anim-slide-up delay-3">
+        <div class="sensor-tile">
+            <div class="sensor-tile-label">🌡 Temperature</div>
+            <div class="sensor-tile-value">
+                {% if temperature is not none %}{{ "%.2f" | format(temperature) }}{% else %}—{% endif %}
+            </div>
+            <div class="sensor-tile-unit">°C</div>
+        </div>
+        <div class="sensor-tile">
+            <div class="sensor-tile-label">📳 Vibration RMS</div>
+            <div class="sensor-tile-value">
+                {% if vibration is not none %}{{ "%.3f" | format(vibration) }}{% else %}—{% endif %}
+            </div>
+            <div class="sensor-tile-unit">raw</div>
+        </div>
+    </div>
+
+    <!-- Info note -->
+    <div style="text-align:center; margin-top:2rem; font-size:0.78rem; color:var(--text-muted);">
+        <i class="bi bi-info-circle me-1"></i>
+        Connects to Arduino on <strong style="color:var(--text-secondary);">COM3</strong> at 9600 baud.
+        Ensure <code>motor_model.pkl</code> exists before using live monitoring.
+    </div>
+
+</div>
+{% endblock %}
