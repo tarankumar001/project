@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+
+{% block title %}Training Logs - Motor ML{% endblock %}
+
+{% block content %}
+  <div class="row justify-content-center">
+    <div class="col-lg-10">
+      <div class="card shadow-sm border-0 fade-in-up fade-delay-1">
+        <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+          <strong>Training History</strong>
+          <span class="small text-muted">Most recent runs first</span>
+        </div>
+        <div class="card-body">
+          {% if logs %}
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th scope="col">Time (UTC)</th>
+                  <th scope="col">User</th>
+                  <th scope="col">Accuracy</th>
+                  <th scope="col">Samples</th>
+                  <th scope="col">Anomaly rate</th>
+                  <th scope="col">ROC AUC</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in logs %}
+                <tr>
+                  <td class="small text-muted">{{ row.created_at }}</td>
+                  <td>{{ row.username }}</td>
+                  <td>
+                    {% if row.accuracy is not none %}
+                      {{ (row.accuracy * 100) | round(2) }}%
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    {{ row.n_samples or 0 }}
+                    <span class="text-muted small d-block">
+                      T {{ row.n_train or 0 }} / V {{ row.n_test or 0 }}
+                    </span>
+                  </td>
+                  <td>
+                    {% if row.anomaly_rate is not none %}
+                      {{ (row.anomaly_rate * 100) | round(1) }}%
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if row.roc_auc is not none %}
+                      {{ row.roc_auc | round(4) }}
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+            <p class="text-muted mb-0">
+              No training runs have been logged yet. Train a model from the
+              <strong>Upload</strong> tab and they will appear here.
+            </p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+

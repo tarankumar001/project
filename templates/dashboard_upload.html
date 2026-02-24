@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Data - Motor ML{% endblock %}
+
+{% block content %}
+  <div class="row justify-content-center">
+    <div class="col-lg-6">
+      {% if show_animation %}
+      <div class="card shadow-sm mb-4 border-0">
+        <div class="card-header bg-secondary text-white">
+          <strong>Training Model...</strong>
+        </div>
+        <div class="card-body">
+          <p class="small text-muted mb-2" id="trainingLabel">
+            Please wait while the RandomForest model is being trained.
+          </p>
+          <div class="progress" style="height: 18px;">
+            <div
+              id="trainingProgress"
+              class="progress-bar progress-bar-striped progress-bar-animated"
+              role="progressbar"
+              style="width: 0%;"
+              aria-valuenow="0"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            ></div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="card shadow-sm mb-4 border-0">
+        <div class="card-header bg-primary text-white">
+          <strong>Upload Training Data</strong>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">
+            Upload a CSV file with columns:
+            <code>temperature</code>,
+            <code>vibration</code>,
+            <code>label</code>.
+            The app will split into train/test, train a RandomForest model,
+            and update the results page.
+          </p>
+
+          {% if message %}
+          <div class="alert alert-success" role="alert">
+            {{ message }}
+          </div>
+          {% endif %}
+
+          {% if error %}
+          <div class="alert alert-danger" role="alert">
+            {{ error }}
+          </div>
+          {% endif %}
+
+          <form method="post" enctype="multipart/form-data">
+            <div class="mb-3">
+              <label for="csvFile" class="form-label">CSV file</label>
+              <input
+                class="form-control"
+                type="file"
+                id="csvFile"
+                name="csv_file"
+                accept=".csv"
+                required
+              >
+            </div>
+
+            <div class="mb-3">
+              <ol class="small text-muted mb-0">
+                <li>Select your dataset CSV.</li>
+                <li>Click <strong>Train Model</strong>.</li>
+                <li>Open the <strong>Results</strong> tab to view metrics and plots.</li>
+              </ol>
+            </div>
+
+            <button type="submit" class="btn btn-primary w-100">
+              Train Model
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if show_animation %}
+  <script>
+    document.addEventListener("DOMContentLoaded", function () {
+      const bar = document.getElementById("trainingProgress");
+      const label = document.getElementById("trainingLabel");
+      if (!bar || !label) return;
+
+      let progress = 0;
+      const interval = setInterval(function () {
+        progress += Math.random() * 15; // jump in realistic chunks
+        if (progress >= 100) {
+          progress = 100;
+          clearInterval(interval);
+          label.textContent = "Training complete. You can now open the Results tab to inspect the model.";
+          bar.classList.remove("progress-bar-animated");
+        }
+        bar.style.width = progress.toFixed(0) + "%";
+        bar.setAttribute("aria-valuenow", progress.toFixed(0));
+      }, 300);
+    });
+  </script>
+  {% endif %}
+{% endblock %}
+
